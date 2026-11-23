@@ -1,0 +1,51 @@
+# 米家设备表。改这里就能改面板：房间里有哪些设备、顺序、did、属性名全是数据。
+#
+# 两级：第一级是房间名，第二级是设备名（都直接显示在页面上，所以用中文）。
+# 一台设备长什么样靠字段区分：有 kind 的是传感器，没有的是开关。
+# 名字就是 id（接口里用「房间/设备」，如「客厅/吸顶灯」），改名等于换了台设备。
+#
+# did 与属性名来自 miot-spec 与实测，不是猜的。字符串一律加引号：
+# YAML 1.1 会把 on 读成布尔值、把纯数字 did 读成整数。
+#
+# 每台设备的坑写在它旁边，不要挪走：
+#   - 羽毛灯：开关走墙面开关的 on-2（同一个继电器），本体 1116662145 只用于调光
+#   - 景观灯：插座 hmi208 的三路不是三个插孔 —— siid2=主插座 on-2、siid3=USB on-3、
+#     siid4=指示灯 on-4；景观灯接在 USB 口上，所以绑 on-3
+#   - 阳台灯：晾衣机自带的灯
+#   - 书房筒灯 / 书房灯带：挂在主卧那面开关上，但照的是书房，所以名字保留书房前缀
+#   - 台灯：没有 on，开关是 on-2
+#   - 温湿度：开关面板上是带后缀的 temperature-6 / relative-humidity-6，
+#     蓝牙温湿度计是裸的 temperature / relative-humidity
+
+rooms:
+  客厅:
+    吸顶灯: { did: "1095838227", prop: "on-3" }
+    射灯: { did: "1095838227", prop: "on-4" }
+    羽毛灯: { did: "1095838227", prop: "on-2" }
+    景观灯: { did: "306242417", prop: "on-3" }
+    阳台灯: { did: "624065104", prop: "on" }
+    温湿度:
+      kind: th
+      did: "1095838227"
+      props: { temperature: "temperature-6", humidity: "relative-humidity-6" }
+
+  主卧:
+    吸顶灯: { did: "1095834661", prop: "on-3" }
+    书房筒灯: { did: "1095834661", prop: "on-4" }
+    书房灯带: { did: "405232176", prop: "on" }
+    温湿度:
+      kind: th
+      did: "1095834661"
+      props: { temperature: "temperature-6", humidity: "relative-humidity-6" }
+
+  次卧:
+    吸顶灯: { did: "1041918964", prop: "on" }
+    台灯: { did: "847008456", prop: "on-2" }
+    温湿度:
+      kind: th
+      did: "blt.3.1p0p7el1kcg00"
+      props: { temperature: "temperature", humidity: "relative-humidity" }
+    烟感:
+      kind: smoke
+      did: "blt.3.1k9cu3ingcg00"
+      props: { status: "status", battery: "battery-level" }
