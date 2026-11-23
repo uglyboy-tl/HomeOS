@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>米家</title>
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/mijia.css">
+<!-- vendor 两个文件必须是本地副本（不走 CDN）；persist 要在 alpine 之前注册 -->
+<!-- 顺序有讲究：persist 和我们的注册脚本都要在 alpine 之前，
+     因为 alpine 一旦执行就立刻 start()，之后再注册 alpine:init 就晚了 -->
+<script defer src="/assets/vendor/alpine-persist.min.js"></script>
+<script defer src="/assets/mijia.js"></script>
+<script defer src="/assets/vendor/alpine.min.js"></script>
+</head>
+<body>
+<!-- 结构全由 Alpine 渲染。列表上的 :key 一律用稳定 id（设备/房间），
+     键不变时 Alpine 复用节点、只改文字；换 key = 整块重建 = 墨水屏上闪一下 -->
+<main class="mijia" x-data="mijiaPanel" x-init="start()">
+  <div class="mijia-rooms">
+    <a class="back" href="/" aria-label="返回">←</a>
+    <div class="mijia-tabs" role="group" aria-label="房间">
+      <template x-for="room in rooms" :key="room.id">
+        <button type="button" :data-room="room.id"
+                :aria-current="room.id === cur ? 'true' : null" @click="pick(room.id)"
+                x-text="room.label"></button>
+      </template>
+    </div>
+  </div>
+
+  <div class="mijia-switches">
+    <template x-for="sw in current.switches" :key="sw.id">
+      <button type="button" class="dev-row" :class="{ on: sw.on === true }"
+              :data-id="sw.id" :disabled="stale || sw.bad"
+              @click="toggle(sw)">
+        <span class="name" x-text="sw.label"></span>
+        <!-- 这台读不到时如实写「读不到」，而不是报一个很像真的「关」 -->
+        <span class="state" x-text="sw.bad ? '读不到' : sw.on === true ? '开' : '关'"></span>
+      </button>
+    </template>
+  </div>
+
+  <div class="mijia-env" :hidden="!current.sensors.length" x-cloak>
+    <template x-for="sensor in current.sensors" :key="sensor.id">
+      <div :class="{ alarm: sensor.fault }">
+        <div class="line">
+          <span class="lbl" x-text="sensor.label"></span>
+          <span class="val" :class="sensor.cls" x-text="sensor.text"></span>
+          <!-- 没 sub 时文本为空、不占宽度；不用 x-show，切 display 会引起重排 -->
+          <span class="sub" x-text="sensor.sub || ''"></span>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- 拉不到状态：值照旧显示，但按钮用原生 disabled 停掉（Alpine 里也再兜一层） -->
+  <div class="mijia-offline" x-show="stale" x-cloak role="status">离线：显示上次状态，操作已停用</div>
+  <div class="mijia-toast" :class="{ show: toast }" role="status" aria-live="polite" x-text="toast"></div>
+</main>
+</body>
+</html>

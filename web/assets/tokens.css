@@ -1,0 +1,152 @@
+/* 只有一种皮肤：墨水屏。纯黑白、零圆角、零阴影、零动画。
+   虚拟画布 --vw/--vh 决定 1rem 多大；720×1440（inkPalm）与 600×800（Kindle）都等比缩放。 */
+
+:root {
+  /* 墨水屏只要一种配色：声明 light，别让浏览器把页面强制成深色 */
+  color-scheme: light;
+  --vw: 36;
+  --vh: 72;
+  --bg: #fff;
+  --fg: #000;
+  --line: #000;
+  --fs-title: 2.6rem;
+  --fs-body: 1.8rem;
+  --gap: 1.2rem;
+  --tap: 10rem;
+  --col: 15rem;
+}
+
+* { box-sizing: border-box; }
+
+/* 页面是 agent 写的，不可能全部自觉：一刀清掉所有会拖慢/留残影的东西 */
+*,
+*::before,
+*::after {
+  animation: none !important;
+  transition: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  text-shadow: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  font-size: calc(min(100vw / var(--vw), 100vh / var(--vh)));
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  /* dvh：地址栏/系统栏收起时 vh 会让页面比视口高一截，出现多余的滚动 */
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-wrap: break-word;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.35;
+}
+
+/* 只禁掉控件上的长按选中：正文、日志、页面内容本该能选 */
+:where(a, button, .card, .back, .dev-row, .mijia-rooms button, .agent-tabs button) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 固定页/功能页的通用骨架：标题 + 内容区 */
+/* 图不撑破列，长串不把页面撑宽（WCAG 1.4.10：320px 宽也不能溢出） */
+img,
+video {
+  max-inline-size: 100%;
+  block-size: auto;
+}
+
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: var(--gap);
+}
+
+.page-title {
+  margin: 0;
+  font-size: var(--fs-title);
+  line-height: 1.2;
+}
+
+/* 返回：自己写在页面里的方块按钮，箭头比文字省一次重绘 */
+.back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  min-width: 4.6rem;
+  min-height: 4.6rem;
+  padding: 0 1rem;
+  color: var(--fg);
+  font-size: 2.8rem;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+}
+.back:active { background: var(--fg); color: var(--bg); }
+
+/* 宫格：列宽随设备变，一屏放不下就换行，绝不横向滚动。
+   首页用 <ul>/<li>（链接是列表内容），凭面页直接把 .card 放进去也行。 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--col), 1fr));
+  gap: var(--gap);
+  align-content: start;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grid > li { display: flex; }
+.grid > li > .card { flex: 1; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--gap) / 2);
+  min-height: var(--tap);
+  padding: var(--gap);
+  background: var(--bg);
+  color: var(--fg);
+  text-decoration: none;
+  border: 0.25rem solid var(--line);
+}
+.card:active { background: var(--fg); color: var(--bg); }
+
+.card-title { font-size: var(--fs-body); font-weight: 600; text-align: center; }
+
+.icon {
+  width: 1.7em;
+  height: 1.7em;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  /* 直角端点/拐角：墨水屏上 round 会显得糊，直角与小字号更搭 */
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+
+.card .icon { width: 3.2rem; height: 3.2rem; stroke-width: 1.6; }
+
+/* 所有可点元素：去掉双击缩放的 300ms 等待，墨水屏上这 300ms 能感觉到 */
+:where(a, button, textarea, input) { touch-action: manipulation; }
+
+:where(a, button, textarea, input):focus-visible {
+  outline: 0.3rem solid var(--fg);
+  outline-offset: -0.3rem;
+}
