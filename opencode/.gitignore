@@ -1,0 +1,11 @@
+# opencode 的配置根（XDG_CONFIG_HOME/opencode）：它和插件会往里写缓存/状态。
+# 默认全忽略，只放行我们手写的这几样。
+
+*
+!.gitignore
+!opencode.jsonc
+!cli.json
+!AGENTS.md
+!agents/
+agents/*
+!agents/*.md

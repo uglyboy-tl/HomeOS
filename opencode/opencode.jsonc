@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 网页搜索：用 Exa（key 走环境变量 EXA_API_KEY）
+  "websearch": { "provider": "exa" },
+  // 全局权限（三个模式共用）：opencode 的规则集按「内置基线 → 全局 → agent」拼接，后面的覆盖前面的。
+  // 没人能回答授权请求，且 ask 没有超时，一旦落到 ask 就永久卡住 —— 可能 ask 的入口一律 deny。
+  "permissions": [
+    // 密钥不进上下文（内置基线对这两个是 ask，必须显式 deny 才能盖掉）
+    { "action": "read", "resource": "*.env", "effect": "deny" },
+    { "action": "read", "resource": "*.env.*", "effect": "deny" },
+    // question 工具就是“提问等回答”，这里没有能点按钮的人
+    { "action": "question", "resource": "*", "effect": "deny" },
+    // 子代理自带一套更宽的权限（general 是全 allow），等于旁路；谁都不该用
+    { "action": "task", "resource": "*", "effect": "deny" },
+    // 工作目录（web/）之外的文件一律不碰，只放行 /tmp：临时脚本、试验文件都丢那里
+    { "action": "external_directory", "resource": "*", "effect": "deny" },
+    { "action": "external_directory", "resource": "/tmp/**", "effect": "allow" },
+    { "action": "edit", "resource": "/tmp/**", "effect": "allow" }
+  ],
+  // 上游只提供 low/high/max，none 是我们自己造的变体（chat 用 #none，不需要思考链）
+  "providers": {
+    "opencode-go": {
+      "models": {
+        "deepseek-v4.1-flash": {
+          "variants": [
+            { "id": "none", "body": { "chat_template_kwargs": { "thinking": false } } }
+          ]
+        }
+      }
+    }
+  }
+  // 不装插件：cc-safety-net@latest 运行时要用 node/bun 下载，镜像里没有，装了只会每次重启重装。
+  // 真要装，先把 bun 打进镜像，并把缓存目录指到 /data。
+}
