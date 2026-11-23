@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+.devdata
+data
+__pycache__
+.pytest_cache
+docs
+tests
+.env.example
+opencode/opencode.env
+# 功能卷由 compose 挂载，镜像里只留空目录
+web/pages/*
+.ruff_cache/
+.agents/

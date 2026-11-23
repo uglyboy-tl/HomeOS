@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.devdata/
+data/
+.playwright-cli/
+.pytest_cache/
+opencode/opencode.env
+.ruff_cache/
