@@ -1,0 +1,81 @@
+/* 助手页：三个模式标签 + 对话区 + 输入条。只占位，还没有接后端。 */
+
+.agent { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+/* 顶部：返回 + 三个模式，和米家页同一套排法 */
+.agent-modes {
+  display: flex;
+  align-items: stretch;
+  min-height: 5.8rem;
+  border-bottom: 0.2rem solid var(--line);
+  flex: 0 0 auto;
+}
+.agent-modes .back {
+  align-self: stretch;
+  min-width: 6.6rem;
+  min-height: auto;
+  padding: 0;
+  border-right: 0.1rem solid var(--line);
+  font-size: 2.2rem;
+}
+.agent-tabs { display: flex; flex: 1 1 auto; }
+.agent-tabs button {
+  flex: 1;
+  border: 0;
+  border-right: 0.1rem solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 2.2rem;
+  font-weight: 700;
+}
+.agent-tabs button:last-child { border-right: 0; }
+.agent-tabs button[aria-current='true'] { background: var(--fg); color: var(--bg); }
+
+/* 对话区：唯一允许滚动的地方（聊天内容会超过一屏） */
+.agent-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  overscroll-behavior: contain;   /* 滑到底不要带动整页 */
+}
+.agent-empty { margin: 0; color: var(--fg); }   /* 墨水屏不耍灰：opacity 会抖成噪点 */
+
+/* 输入条：钉在底部，按钮和输入框同高 */
+.agent-say {
+  display: flex;
+  gap: calc(var(--gap) / 2);
+  padding: var(--gap);
+  padding-bottom: max(var(--gap), env(safe-area-inset-bottom, 0px));
+  border-top: 0.2rem solid var(--line);
+  flex: 0 0 auto;
+}
+.agent-say textarea {
+  flex: 1 1 auto;
+  min-height: 6rem;
+  padding: 0.8rem var(--gap);
+  border: 0.2rem solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 1.8rem;
+  line-height: 1.4;
+  resize: none;
+}
+.agent-say .send {
+  flex: 0 0 auto;
+  min-width: 9rem;
+  border: 0.2rem solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 2rem;
+  font-weight: 700;
+}
+.agent-say .send:active { background: var(--fg); color: var(--bg); }

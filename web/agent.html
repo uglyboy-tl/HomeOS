@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>助手</title>
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/agent.css">
+</head>
+<body>
+<main class="agent">
+  <div class="agent-modes">
+    <a class="back" href="/" aria-label="返回">←</a>
+    <div class="agent-tabs" role="group" aria-label="模式">
+      <button type="button" data-mode="chat" aria-current="true">聊天</button>
+      <button type="button" data-mode="design">设计</button>
+      <button type="button" data-mode="device">高级</button>
+    </div>
+  </div>
+
+  <div class="agent-log" role="log" aria-live="polite">
+    <p class="agent-empty">聊天模式：问什么答什么，不改页面。</p>
+  </div>
+
+  <form class="agent-say" autocomplete="off">
+    <textarea id="say" name="text" rows="2" placeholder="说点什么…"
+              enterkeyhint="send" aria-label="输入"></textarea>
+    <button type="submit" class="send">发送</button>
+  </form>
+</main>
+<script src="/assets/agent.js" defer></script>
+</body>
+</html>
