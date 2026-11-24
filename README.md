@@ -31,9 +31,15 @@
 
 uv run pytest -q                     # 59 条，不联网
 uv run ruff check . && uv run ruff format .
+bunx @biomejs/biome@2.6.8 check --write .   # 前端（web/ 下的固定页与 assets）lint + 格式化
 ```
 
 改 `web/pages/*` 或 `config/mijia.yaml` 不用重启（前者刷新即见，后者按 mtime 重读）。
+
+前端格式化只覆盖人能改的那部分（`web/*.html`、`web/assets/*.{html,js,css}`，见 `biome.jsonc`）；
+`web/pages/**` 是 agent 写的地盘，不参与格式化。biome 只在**本机手动跑**：CI 不装 bun、也不检查前端格式，
+NAS 上同样没有 bun。
+规则里 `a11y`、`complexity`、`style` 三组是关掉的，原因写在 `biome.jsonc` 注释里。
 
 容器里也想改 `app/*.py` 立即生效（不重建容器）：给 compose 加上 `HOMEOS_DEV: "1"`，
 entrypoint 会带 `--reload --reload-dir /app/app`。代价是每次存盘 app 进程重启，

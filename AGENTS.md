@@ -70,6 +70,7 @@ tests/  docs/
 
 uv run pytest -q                             # 不联网，约 1 秒
 uv run ruff check . && uv run ruff format .
+bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则见 biome.jsonc）
 
 mkdir -p ~/.config/mijia-api && cp .env.example .env   # 填模型 key；服务密码自动生成
 docker compose up -d --build                          # 镜像只支持 arm64
