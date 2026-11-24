@@ -1,5 +1,7 @@
 """应用装配：只有路由表和 lifespan，没有业务逻辑。"""
 
+import asyncio
+import contextlib
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -7,7 +9,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import config, runtime
-from .routes import health, mijia, oc, pages
+from .routes import agent, health, mijia, oc, pages
+from .services import agent as agent_service
 from .services import mijia as mijia_service
 
 
@@ -23,9 +26,16 @@ async def lifespan(_app: FastAPI):
     runtime.stop_event.clear()
     if config.WARM_MIJIA:
         threading.Thread(target=_warm_mijia, daemon=True).start()
+    # 常驻订阅 opencode 的事件流：本轮文本靠它攒，前端只按自己的节奏来取
+    stop = asyncio.Event()
+    watcher = asyncio.create_task(agent_service.run_subscriber(stop))
     try:
         yield
     finally:
+        stop.set()
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
         runtime.stop_event.set()  # 先让 SSE 生成器退出，再关服务
 
 
@@ -38,8 +48,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     # 顺序有意义：API 在前，兜底的静态路由在后
+    agent.install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(mijia.router)
+    app.include_router(agent.router)
     app.include_router(oc.router)
     app.include_router(pages.router)
     return app

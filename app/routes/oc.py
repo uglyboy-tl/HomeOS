@@ -7,27 +7,24 @@
 上游口令（`OPENCODE_SERVER_PASSWORD`）由 entrypoint 自动生成并 export，没人需要手填。
 """
 
-import base64
-
 import httpx
 from fastapi import APIRouter, Request
 
-from .. import config
 from .._proxy import forward
+from ..services import opencode
 
 router = APIRouter()
 
 
 @router.api_route("/oc/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def oc_proxy(request: Request, path: str):
-    url = f"http://{config.OC_HOST}:{config.OC_PORT}/{path.lstrip('/')}"
+    url = opencode.url(f"/{path.lstrip('/')}")
     if request.url.query:
         url = f"{url}?{request.url.query}"
-    cred = base64.b64encode(f"opencode:{config.OC_SERVER_PASSWORD}".encode()).decode()
     return await forward(
         request,
         url,
         label="opencode",
         timeout=httpx.Timeout(None, connect=10.0),
-        headers={"Authorization": f"Basic {cred}"},
+        headers=opencode.headers(),
     )
