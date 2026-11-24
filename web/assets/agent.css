@@ -1,6 +1,20 @@
-/* 助手页：三个模式标签 + 对话区 + 输入条。只占位，还没有接后端。 */
+/* 助手页：三个模式标签 + 对话区 + 输入条。所有对话都走 opencode 的 chat agent。
 
-.agent { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+   这个页面会被软键盘压高度，所以两处特殊处理（别的页面不需要）：
+   1) 字号用的视口高度在加载时钉住（--vh-px，见 agent.html 里那行脚本，公式仍在 tokens.css）：
+      软键盘弹出会让 100vh/dvh 变小，跟着算的话整页的字会一起缩；
+      lvh 在老 WebView 上不认，所以自己记一份初始高度。
+   2) 主区域高度锁 100dvh 并隐藏溢出，让对话区自己滚；否则长对话会把页面撑高，
+      顶部和输入条被推出屏幕。100dvh 会跟着键盘缩，输入条正好停在键盘上方。 */
+
+.agent {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;      /* 页面本身不滚，只有对话区滚 */
+}
 
 /* 顶部：返回 + 三个模式，和米家页同一套排法 */
 .agent-modes {
@@ -31,10 +45,29 @@
 }
 .agent-tabs button:last-child { border-right: 0; }
 .agent-tabs button[aria-current='true'] { background: var(--fg); color: var(--bg); }
+/* 「新对话」贴在输入框上方、右对齐：宽度和「发送」一样，右边缘对齐，
+   视觉上跟输入条是同一列，又不跟主操作抢位置 */
+.agent-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: calc(var(--gap) / 2) var(--gap) 0;
+  flex: 0 0 auto;
+}
+.agent-actions .agent-new {
+  min-width: 9rem;
+  min-height: 4.4rem;
+  padding: 0 1.2rem;
+  border: 0.1rem solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 1.7rem;
+}
+.agent-actions .agent-new:active { background: var(--fg); color: var(--bg); }
 
 /* 对话区：唯一允许滚动的地方（聊天内容会超过一屏） */
 .agent-log {
-  flex: 1 1 auto;
+  flex: 1 1 0;           /* 基准 0：内容再多也不会把这一块撑高 */
   min-height: 0;
   overflow-y: auto;
   padding: var(--gap);
@@ -79,3 +112,15 @@
   font-weight: 700;
 }
 .agent-say .send:active { background: var(--fg); color: var(--bg); }
+
+/* 对话条目：用户说的、agent 回的、出错、思考中。全用纯黑，靠边框/缩进区分 */
+.agent-say-line {
+  margin: 0;
+  padding: 0.6rem var(--gap);
+  border-left: 0.6rem solid var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.agent-reply { margin: 0; padding-left: var(--gap); white-space: pre-wrap; overflow-wrap: break-word; }
+.agent-note { margin: 0; padding-left: var(--gap); }
+.agent-error { margin: 0; padding-left: var(--gap); border-left: 0.6rem double var(--fg); }

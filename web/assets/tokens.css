@@ -32,7 +32,8 @@
 }
 
 html {
-  font-size: calc(min(100vw / var(--vw), 100vh / var(--vh)));
+  /* 1rem = 画布宽与画布高的较小者，等比缩放。--vh-px 给软键盘页面钉住高度（见 agent.html） */
+  font-size: calc(min(100vw / var(--vw), var(--vh-px, 100vh) / var(--vh)));
   -webkit-text-size-adjust: 100%;
 }
 

@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <title>助手</title>
+<script>
+  /* 把当前视口高度记成 --vh-px：软键盘弹出会改 100vh，这个值不变，字号因此不缩 */
+  document.documentElement.style.setProperty('--vh-px', window.innerHeight + 'px');
+</script>
 <link rel="stylesheet" href="/assets/tokens.css">
 <link rel="stylesheet" href="/assets/agent.css">
 </head>
@@ -21,6 +25,10 @@
 
   <div class="agent-log" role="log" aria-live="polite">
     <p class="agent-empty">聊天模式：问什么答什么，不改页面。</p>
+  </div>
+
+  <div class="agent-actions">
+    <button type="button" class="agent-new">新对话</button>
   </div>
 
   <form class="agent-say" autocomplete="off">
