@@ -39,7 +39,8 @@ ensure_opencode_password() {
 # 两个模式走同一套环境：只有绑定地址、数据目录、uvicorn 是否 reload 不同
 prepare() {
   local m="$1"
-  export HOMEOS_DEV=$([ "$m" = dev ] && echo 1 || echo 0)
+  # 显式设了 HOMEOS_DEV 就以它为准：NAS 调试栈靠这个在容器里开热重载
+  export HOMEOS_DEV="${HOMEOS_DEV:-$([ "$m" = dev ] && echo 1 || echo 0)}"
   if [ "$m" = container ]; then
     export HOMEOS_DATA_DIR="${HOMEOS_DATA_DIR:-/data}"
     export HOME=/data                       # 米家 token 落 /data/.config/mijia-api/auth.json
@@ -50,16 +51,26 @@ prepare() {
     cp -r "$ROOT/opencode" "$XDG_CONFIG_HOME/"
     export HOMEOS_WARM_MIJIA="${HOMEOS_WARM_MIJIA:-1}"   # 启动后预热米家登录与设备列表
     BIND_HOST=0.0.0.0
-    RELOAD=""
   else
     export HOMEOS_DATA_DIR="${HOMEOS_DATA_DIR:-$ROOT/.devdata}"
     export HOMEOS_WARM_MIJIA="${HOMEOS_WARM_MIJIA:-1}"
     export XDG_CONFIG_HOME="$ROOT"          # 本机直接用仓库里的 opencode/，改完即生效
     BIND_HOST=127.0.0.1
-    RELOAD="--reload"
+  fi
+  # 热重载只盯 app/（前端改完刷新即见，不用重载）；容器里也认 HOMEOS_DEV=1
+  if [ "$HOMEOS_DEV" = 1 ]; then
+    RELOAD="--reload --reload-dir $ROOT/app"
+  else
+    RELOAD=""
   fi
   export XDG_DATA_HOME="$HOMEOS_DATA_DIR/opencode"   # session 与 snapshot
   export XDG_CACHE_HOME="$HOMEOS_DATA_DIR/cache"
+  # 插件是构建时预装好的（镜像里的 /app/plugin-cache），运行时根目录只读、也不联网，
+  # 所以每次启动复制进可写缓存；没有就跳过（旧镜像或本机模式）。
+  if [ -d /app/plugin-cache ]; then
+    mkdir -p "$XDG_CACHE_HOME"
+    cp -r /app/plugin-cache/. "$XDG_CACHE_HOME"/
+  fi
   export OPENCODE_DISABLE_PROJECT_CONFIG=1           # 不加载项目根 AGENTS.md，只用 opencode/AGENTS.md
   # 仓库/镜像里的 venv（uv sync 的产物）优先，两条路径同一个位置
   if [ -x "$ROOT/.venv/bin/uvicorn" ]; then
@@ -89,7 +100,8 @@ oc_bin() {
 # ---------- 三个进程 ----------
 
 cmd_web() {
-  # shellcheck disable=SC2086 — RELOAD 是空或 --reload，故意不加引号
+  # RELOAD 是空或 --reload ...，故意不加引号
+  # shellcheck disable=SC2086
   exec uvicorn app.main:app --host "$BIND_HOST" --port "$WEB_PORT" --log-level info $RELOAD
 }
 

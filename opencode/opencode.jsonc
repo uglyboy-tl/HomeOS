@@ -1,5 +1,7 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  // 插件：cc-safety-net（危险命令拦截）。镜像构建时已装好并缓存，运行时不联网。
+  "plugin": ["cc-safety-net"],
   // 网页搜索：用 Exa（key 走环境变量 EXA_API_KEY）
   "websearch": { "provider": "exa" },
   // 全局权限（三个模式共用）：opencode 的规则集按「内置基线 → 全局 → agent」拼接，后面的覆盖前面的。
@@ -20,6 +22,8 @@
   // 上游只提供 low/high/max，none 是我们自己造的变体（chat 用 #none，不需要思考链）
   "providers": {
     "opencode-go": {
+      // 密钥只从环境变量来（栈内 .env → 容器 env），不落 auth.json、不挂宿主机凭据
+      "settings": { "apiKey": "{env:OPENCODE_GO_API_KEY}" },
       "models": {
         "deepseek-v4.1-flash": {
           "variants": [
