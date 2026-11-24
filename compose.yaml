@@ -1,31 +1,36 @@
-# NAS 部署：docker compose up -d --build
-# 前置：mkdir -p data && cp .env.example data/env && 填密码
+# 自托管部署参考：镜像来自 ghcr.io（由 .github/workflows/image.yml 构建）。
+# 用法：改下面两个路径后 `docker compose up -d`；要自己构建就把 image: 换成 build:。
 services:
   homeos:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    image: homeos:dev
+    image: ghcr.io/uglyboy-tl/homeos:latest
     container_name: homeos
     restart: unless-stopped
     ports:
       - "8080:8080"
-    env_file:
-      - ./data/env
     environment:
       HOMEOS_DATA_DIR: /data
-    # 容器以 uid 1000 运行；宿主机目录要先 chown 到同一个 uid（或在这里覆盖 user）
-    # user: "1000:1000"
+      # 模型/搜索 key：栈目录里的 .env 提供，compose 自动加载并在这里引用。
+      # 不挂宿主机 auth.json——opencode 的凭据只走环境变量（见 opencode/opencode.jsonc）
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      TZ: Asia/Shanghai
     volumes:
-      # 卷 1：功能目录。agent 唯一能写的地方，备份它就是备份全部用户内容
+      # 功能页：agent 唯一能写的地方，备份它就是备份全部用户内容
       - ./web/pages:/app/web/pages
-      # 卷 2：运行时状态（米家缓存、opencode session/snapshot、米家 token）。丢了可重来
-      - ./data:/data
-      # 设备表：改 config/mijia.yaml 后重启容器即可，不用重建镜像
+      # 设备表：改完重启容器即可
       - ./config:/app/config:ro
-    read_only: true
+      # 米家登录态复用宿主机（库写死 ~/.config/mijia-api，不认 XDG）
+      - ${XDG_CONFIG_HOME:-${HOME}/.config}/mijia-api:/data/.config/mijia-api
+    # 运行时状态（opencode 配置副本/session、米家缓存）不持久化：重启即重建
     tmpfs:
-      - /tmp:size=512m,mode=1777
+      - /tmp:size=512m
+      - /data:size=1g
+    read_only: true
     security_opt:
       - no-new-privileges:true
-    # 容器里 agent 会执行命令，但根文件系统只读、没有宿主挂载、没有特权
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/ready"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
