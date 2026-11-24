@@ -112,7 +112,19 @@ document.addEventListener('alpine:init', () => {
       },
 
       async get(url, init) {
-        const resp = await fetch(url, init);
+        let resp;
+        try {
+          resp = await fetch(url, init);
+        } catch {
+          // 墨水屏 Wi-Fi 会中途睡下去（写请求要等 1-2s 读回），缓一下重发一次；
+          // 开关是幂等的，重发安全
+          await new Promise((r) => setTimeout(r, 300));
+          try {
+            resp = await fetch(url, init);
+          } catch {
+            throw new Error('网络断了');
+          }
+        }
         const body = await resp.json().catch(() => ({ ok: false, detail: '返回不是 JSON' }));
         if (!resp.ok || !body.ok) throw new Error(body.detail || body.error || '请求失败');
         return body;
@@ -205,22 +217,19 @@ document.addEventListener('alpine:init', () => {
       async toggle(sw) {
         if (this.stale || sw.busy || sw.bad) return;   // 离线或读不到时不让点，避免拿旧值乱写
         const want = sw.on !== true;
-        const prev = sw.on;                  // 失败就回到这个值，别把“开”谎报成“关”
-        sw.busy = true;
-        sw.on = want;                        // 先本地翻转，墨水屏要即时反馈
+        sw.busy = true;                      // 期间这一行锁住并显示「…」
         try {
           const body = await this.get('/api/mijia/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: sw.id, on: want }),
           });
-          sw.on = body.on;                   // 以服务端读回值为准
+          sw.on = body.on;                   // 服务端读回成功才变色：失败时灯其实没动
           if (body.on !== want) this.showToast('设备没按预期变化');
           this.values[sw.id] = { on: body.on };
           this.saveCache();
         } catch (e) {
-          sw.on = prev;
-          this.showToast('失败：' + e.message);
+          this.showToast('失败：' + e.message);   // 状态保持原样，不假装成功
         } finally {
           sw.busy = false;
         }

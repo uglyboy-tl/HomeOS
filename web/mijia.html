@@ -32,11 +32,11 @@
   <div class="mijia-switches">
     <template x-for="sw in current.switches" :key="sw.id">
       <button type="button" class="dev-row" :class="{ on: sw.on === true }"
-              :data-id="sw.id" :disabled="stale || sw.bad"
+              :data-id="sw.id" :disabled="stale || sw.bad || sw.busy"
               @click="toggle(sw)">
         <span class="name" x-text="sw.label"></span>
-        <!-- 这台读不到时如实写「读不到」，而不是报一个很像真的「关」 -->
-        <span class="state" x-text="sw.bad ? '读不到' : sw.on === true ? '开' : '关'"></span>
+        <!-- 读不到时如实写「读不到」；处理中写「…」，否则连点会被默默丢掉 -->
+        <span class="state" x-text="sw.busy ? '…' : sw.bad ? '读不到' : sw.on === true ? '开' : '关'"></span>
       </button>
     </template>
   </div>
