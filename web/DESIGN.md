@@ -181,3 +181,25 @@ web/
   必须同源，`viewBox` 放在 `<symbol>` 上，外层 `<svg>` 给尺寸（CSS 也能给，属性只是兜底）。
 - 可点元素统一 `touch-action: manipulation`，去掉双击缩放的 300ms 等待。
 - 不写 `maximum-scale` / `user-scalable=no`，不关页面缩放。
+
+## 8. 助手页（/agent）与 /api/agent/*
+
+页面只做三件事：画一轮、发一句、跟着看到结束；消息顺序、错误措辞、会话生命周期都在后端。
+
+- **显示只有四种态**：提示语 / 「正在工作…」/ 正文 / 错误。chat 没有思考链，pages/device 会长时间
+  思考或调工具，页面不区分"思考"和"干活"。
+- **只留最近一轮**：新一轮直接替换旧的（不用清屏再画）。
+- **持久化**：`agent/mode` 记模式、`agent/turn/<mode>` 记每个模式最后一轮；进来先画缓存，
+  再对服务器，内容一致时**零重绘**。
+- **逐字**：SSE `/api/agent/stream`（服务端限流 4 次/秒）+ 轮询兜底；`done` 但没正文的帧不算结束。
+- **软键盘**：字号用的视口高度在加载时钉成 `--vh-px`（`agent.html` 里的内联脚本，公式仍只在 `tokens.css`），
+  键盘弹出只压高度不改字号；`.agent` 锁 `100dvh` + `overflow:hidden`，长对话由 `.agent-log` 自己滚。
+- **测试台接口**（验证 opencode 配置用）：
+
+  ```
+  GET  /api/agent/info?mode=     绑定的 agent 与模型
+  GET  /api/agent/trace?mode=    消息轨迹（时间正序，带 model/tokens/cost/finish/error_raw）
+  POST /api/agent/ask            {mode,text,timeout} 同步一轮，返回耗时/token/模型
+  POST /api/agent/bind           {mode,agent} 临时换 agent（重建会话）
+  POST /api/agent/model          {mode,providerID,id,variant} 换模型
+  ```

@@ -95,7 +95,7 @@ opencode/                 opencode 的东西（XDG_CONFIG_HOME=<repo>，配置�
 
 docker/  Dockerfile entrypoint.sh
 compose.yaml              NAS 部署（read_only + 两个卷）
-.env.example              data/env 的模板
+.env.example              .env 的模板（模型 key；服务密码自动生成）
 docker/entrypoint.sh      唯一启动入口：容器无参数=前台；本机带子命令=后台托管
 tests/  docs/
 ```
@@ -187,7 +187,7 @@ Kindle（600 宽，eink）16.7px。**不要乘 10**，那是早期文档里的�
 ./docker/entrypoint.sh up|down|restart [web|pages|agent|all]|status|log
 
 # NAS
-mkdir -p data && cp .env.example data/env && $EDITOR data/env   # 填 OPENCODE_SERVER_PASSWORD
+mkdir -p ~/.config/mijia-api && cp .env.example .env && $EDITOR .env   # 填模型 key
 docker compose up -d --build      # 镜像 homeos:dev，容器 homeos
 docker compose logs -f homeos
 curl -fsS localhost:8080/api/ready

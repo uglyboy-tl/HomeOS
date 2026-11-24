@@ -71,8 +71,8 @@ tests/  docs/
 uv run pytest -q                             # 不联网，约 1 秒
 uv run ruff check . && uv run ruff format .
 
-mkdir -p data && cp .env.example data/env    # 填 OPENCODE_SERVER_PASSWORD
-docker compose up -d --build                 # 镜像只支持 arm64
+mkdir -p ~/.config/mijia-api && cp .env.example .env   # 填模型 key；服务密码自动生成
+docker compose up -d --build                          # 镜像只支持 arm64
 ```
 
 `web/pages/*` 改完不用重启：刷新即见。
@@ -95,8 +95,10 @@ docker compose up -d --build                 # 镜像只支持 arm64
 - 不引构建步骤、CDN、外部字体、前端框架。要图标用 `assets/icons.svg` 的 symbol 或内联 SVG。
   例外：**固定页**（`web/*.html`，人维护）可以用 `web/assets/vendor/` 里的本地副本（目前只有 Alpine +
   persist，见 `web/DESIGN.md`）；**功能页**（`web/pages/<slug>/`）不得引任何框架。
-- 不写死密钥；需要密钥的东西走环境变量或 `data/env`（不进 git）。
-  web ↔ opencode 的服务密码不需要人管：entrypoint 首次启动生成到 `$HOMEOS_DATA_DIR/auth/opencode`。
+- 不写死密钥；需要密钥的东西走环境变量或 `.env`（不进 git）。
+  web ↔ opencode 的服务密码不需要人管：entrypoint 每次启动生成到 `$HOMEOS_DATA_DIR/auth/opencode`。
+  容器里 `/data` 是 tmpfs，所以这个密码、opencode 会话、米家缓存都**不跨重启**（绑定的只有
+  `pages/`、`config/`、宿主机 `~/.config/mijia-api`）。
 - 不做登录鉴权（v1 只在内网，暴露公网前必须先补 Caddy + Basic Auth，并关掉 device 模式）。
 - 不自动 `git commit` / `git push`。
 - 一次性操作当场用命令行做，不往 `entrypoint.sh` 里加分支。
@@ -111,14 +113,21 @@ docker compose up -d --build                 # 镜像只支持 arm64
 
 - **米家必须 sync def**：`mijiaAPI` 一次读回约 1s，写成 `async def` 会堵住事件循环，整站跟着卡。
 - **写后要读回确认**：`set()` 只回 ack；云接口有约 1s 延迟，所以间隔 0.4s 重读最多 4 次，
-  等于目标值才算成功。前端先翻本地状态再等响应。
+  等于目标值才算成功。前端拿服务端读回的值才变色（期间那行显示「…」），失败时灯其实没动，
+  不假装成功——墨水屏上宁可等 1s 也别翻两次。
 - **缓存分层**：开关 3s 内存、温湿度 300s、烟感 900s，后两者落盘到
-  `$HOMEOS_DATA_DIR/mijia/state.json`；读失败退回旧值并标 `stale`。别去掉落盘缓存，
-  否则容器重启首屏要等云。
+  `$HOMEOS_DATA_DIR/mijia/state.json`；读失败退回旧值并标 `stale`。落盘缓存的作用是
+  **同一次运行内**多个房间/页面共享一次云读取（容器里 `/data` 是 tmpfs，重启即清）；
+  去掉它每个房间都要各自等云。
 - **`get_devices_list` 只在首次调一次**（每次约 0.8s，缓存成常量）。新增设备要重启服务。
 - **墨水屏开销**：轮询 ≥ 60s 且只在可见时；不要 SSE 逐字、不要时钟、不要 hover；
+  例外只有一个：助手页的模型输出用 SSE 推，但**服务端限流 4 次/秒**、页面只在文本变化时重绘
+  （逐 token 刷会糊屏，4 次/秒等于手写输入法的观感）；
   内容没变就不重画（`mijia.js` 比指纹）。
 - **事件委托**：监听挂在容器上，别在渲染时逐个绑——静态 DOM 不会重绑，绑了就点不动（踩过）。
+- **opencode 的消息落库滞后于事件**：正文要等步骤结束才进 `/message`，所以
+  逐字文本只能来自 SSE 的 `session.text.delta`；`done` 可能先到一帧（正文还没有），
+  前端把它当结束就会永远不显示回复（踩过）。
 - **`tokens.css` 的 `!important` 是有意的**：页面是 agent 写的，不可能全部自觉。别为某页放开。
 
 **未验证（第一次上 NAS 要盯）**
