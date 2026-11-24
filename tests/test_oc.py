@@ -44,4 +44,3 @@ def test_mounts_every_method(captured):
     for method in ("put", "patch", "delete"):
         getattr(TestClient(app), method)("/oc/x")
     assert captured["method"] == "DELETE"
-

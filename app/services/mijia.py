@@ -64,7 +64,7 @@ def _load_disk() -> None:
         if isinstance(doc, dict) and doc.get("version") == CACHE_VERSION:
             entries = doc.get("entries")
             if isinstance(entries, dict):
-                with _cache_lock:   # 读路径拿的是这把锁，写也得是它
+                with _cache_lock:  # 读路径拿的是这把锁，写也得是它
                     _disk.update(entries)
 
 
@@ -72,7 +72,7 @@ def _save_disk() -> None:
     global _dirty
     if not _dirty:
         return
-    with _cache_lock:   # 拷贝快照：另一个线程可能正在往 _disk 插新键
+    with _cache_lock:  # 拷贝快照：另一个线程可能正在往 _disk 插新键
         if not _dirty:
             return
         entries = dict(_disk)
@@ -85,7 +85,7 @@ def _save_disk() -> None:
         tmp.replace(CACHE_FILE)  # 原子替换，断电不会写出半截文件
     except OSError:
         with _cache_lock:
-            _dirty = True   # 没写成，下回再试
+            _dirty = True  # 没写成，下回再试
 
 
 def _cached(key: str, ttl: float, fetch: Callable[[], dict]) -> dict:

@@ -283,8 +283,8 @@ def test_set_switch_confirms_by_readback(monkeypatch):
     mijia._disk["sensor:客厅/温湿度"] = {"ts": 1, "v": {"temperature": 24.0, "humidity": 30}}
 
     assert mijia.set_switch("客厅/灯", True) == {"id": "客厅/灯", "on": True}
-    assert "switch:客厅/灯" not in mijia._disk          # 这一台被作废
-    assert "sensor:客厅/温湿度" in mijia._disk          # 别的设备不受影响
+    assert "switch:客厅/灯" not in mijia._disk  # 这一台被作废
+    assert "sensor:客厅/温湿度" in mijia._disk  # 别的设备不受影响
 
 
 def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
@@ -295,7 +295,7 @@ def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
 
     class Stubborn:
         def set(self, prop, want):
-            pass                        # ack 了，但状态一直不变
+            pass  # ack 了，但状态一直不变
 
         def get(self, prop):
             return False
@@ -364,9 +364,9 @@ def test_read_errors_are_not_cached(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError):
         mijia._cached("sensor:x", 900, boom)
-    assert "sensor:x" not in mijia._disk          # 无缓存时：抛异常，什么都不写
+    assert "sensor:x" not in mijia._disk  # 无缓存时：抛异常，什么都不写
 
     mijia._disk["sensor:x"] = {"ts": 0, "v": {"temperature": 24.0, "humidity": 30}}
-    out = mijia._cached("sensor:x", 900, boom)     # 有旧值时：返回旧值 + stale
+    out = mijia._cached("sensor:x", 900, boom)  # 有旧值时：返回旧值 + stale
     assert out["stale"] is True
-    assert mijia._disk["sensor:x"]["ts"] == 0      # 落盘时间戳没被刷新（不算成功读取）
+    assert mijia._disk["sensor:x"]["ts"] == 0  # 落盘时间戳没被刷新（不算成功读取）

@@ -70,7 +70,7 @@ def test_timeout_maps_to_504(client):
     r = client.get("/t")
     assert r.status_code == 504
     assert "超时" in r.json()["error"]
-    assert "client" in closed          # 失败也要关掉 client
+    assert "client" in closed  # 失败也要关掉 client
 
 
 def test_upstream_down_maps_to_502(client):
@@ -86,7 +86,7 @@ def test_streams_chunks_and_closes_everything(client):
     r = client.get("/t")
     assert r.status_code == 200
     assert r.text == "data: 1\n\ndata: 2\n\n"
-    assert closed == ["resp", "client"]   # background 里两样都关了
+    assert closed == ["resp", "client"]  # background 里两样都关了
 
 
 def test_stop_event_ends_stream(monkeypatch):
