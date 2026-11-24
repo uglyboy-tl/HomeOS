@@ -5,4 +5,6 @@ data/
 .playwright-cli/
 .pytest_cache/
 opencode/opencode.env
+# 本地/部署的密钥，绝不进 git
+.env
 .ruff_cache/
