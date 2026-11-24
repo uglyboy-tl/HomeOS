@@ -1,0 +1,30 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  // 前端只有手写的固定页与 assets/，功能页（web/pages/**）由 agent 写，不纳入格式化。
+  "files": {
+    "includes": [
+      "web/*.html",
+      "web/assets/*.html",
+      "web/assets/*.js",
+      "web/assets/*.css",
+      // 压缩过的第三方副本：绝不能被格式化
+      "!web/assets/vendor"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      // 无障碍规则建议 <fieldset> 之类，与墨水屏的纯 div 布局冲突
+      "a11y": { "preset": "none" },
+      // useOptionalChain 要求 ?.，老 Kindle/inkPalm 浏览器不一定认
+      "complexity": { "preset": "none" },
+      // useTemplate 之类纯口味，改了只是噪声
+      "style": { "preset": "none" },
+      // height:100vh; height:100dvh 这种降级写法是故意的
+      "suspicious": { "noDuplicateProperties": "off" }
+    }
+  }
+}

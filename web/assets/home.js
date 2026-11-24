@@ -19,7 +19,7 @@ const CACHE_MAX_AGE = 12 * 3600 * 1000;
       if (Date.now() - cached.ts > CACHE_MAX_AGE) return null;
       return cached.pages;
     } catch {
-      return null;   // 缓存坏了就当没有
+      return null; // 缓存坏了就当没有
     }
   }
 
@@ -36,7 +36,7 @@ const CACHE_MAX_AGE = 12 * 3600 * 1000;
   const icon = (name) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'icon');
-    svg.setAttribute('width', '24');   // 属性只是兜底，实际大小由 CSS 给
+    svg.setAttribute('width', '24'); // 属性只是兜底，实际大小由 CSS 给
     svg.setAttribute('height', '24');
     svg.setAttribute('aria-hidden', 'true');
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
@@ -55,7 +55,7 @@ const CACHE_MAX_AGE = 12 * 3600 * 1000;
     card.href = `/p/${item.slug}`;
     const title = document.createElement('span');
     title.className = 'card-title';
-    title.textContent = item.title;   // 标题是 agent 写的，用文本节点，别当 HTML 塞
+    title.textContent = item.title; // 标题是 agent 写的，用文本节点，别当 HTML 塞
     card.append(icon(item.icon), title);
     li.appendChild(card);
     return li;

@@ -24,14 +24,14 @@
   };
   const WORKING = '正在工作…';
   const POLL_MS = 800;
-  const POLL_MAX = 75;              // 轮询兜底最多盯 1 分钟
+  const POLL_MAX = 75; // 轮询兜底最多盯 1 分钟
   const MODE_KEY = 'agent/mode';
   const CACHE_KEY = (m) => 'agent/turn/' + m;
 
   let mode = 'chat';
   let busy = false;
-  let epoch = 0;                    // 切模式/新对话 +1，让旧的轮询与 SSE 作废
-  let liveClose = null;             // 当前那条 SSE 的收尾函数：作废时必须主动关，否则连接一直挂着
+  let epoch = 0; // 切模式/新对话 +1，让旧的轮询与 SSE 作废
+  let liveClose = null; // 当前那条 SSE 的收尾函数：作废时必须主动关，否则连接一直挂着
 
   /* ---- 本地缓存：模式 + 每个模式最后那一轮 ---- */
 
@@ -116,9 +116,14 @@
   /* ---- 请求 ---- */
 
   async function api(path, body) {
-    const init = body === undefined
-      ? {}
-      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const init =
+      body === undefined
+        ? {}
+        : {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          };
     const resp = await fetch(path, init);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.detail || 'HTTP ' + resp.status);
@@ -134,11 +139,12 @@
      两条路都只调 show()，所以"文本没变不重绘"只在一处保证。
      注意：连接后第一帧可能是"这一轮还没开始"的 idle，不能当成结束。 */
   // done 但正文还没到（后端会短暂发这种帧）也不算结束，否则回复永远不显示
-  const finished = (turn) => turn.state === 'error' || (turn.state === 'done' && Boolean(turn.text));
+  const finished = (turn) =>
+    turn.state === 'error' || (turn.state === 'done' && Boolean(turn.text));
 
   function invalidate() {
     epoch += 1;
-    if (liveClose) liveClose();     // 旧的 SSE 不会自己结束：后端没变化就不推帧
+    if (liveClose) liveClose(); // 旧的 SSE 不会自己结束：后端没变化就不推帧
   }
 
   async function follow(token) {
@@ -160,10 +166,10 @@
         try {
           turn = JSON.parse(ev.data);
         } catch {
-          return;                     // 半截数据丢掉，下一帧会补
+          return; // 半截数据丢掉，下一帧会补
         }
         show(turn);
-        write(CACHE_KEY(mode), ev.data);   // 原样存，省一次序列化
+        write(CACHE_KEY(mode), ev.data); // 原样存，省一次序列化
         if (finished(turn)) finish();
       };
       es.onerror = () => {
@@ -244,7 +250,7 @@
     for (const b of tabs.querySelectorAll('button[data-mode]')) {
       b.toggleAttribute('aria-current', b === btn);
     }
-    invalidate();                   // 旧轮询/旧 SSE 作废
+    invalidate(); // 旧轮询/旧 SSE 作废
     setBusy(false);
     reset();
     load();

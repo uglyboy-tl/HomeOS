@@ -16,7 +16,9 @@
   --col: 15rem;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 /* 页面是 agent 写的，不可能全部自觉：一刀清掉所有会拖慢/留残影的东西 */
 *,
@@ -96,7 +98,10 @@ video {
   line-height: 1;
   text-decoration: none;
 }
-.back:active { background: var(--fg); color: var(--bg); }
+.back:active {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* 宫格：列宽随设备变，一屏放不下就换行，绝不横向滚动。
    首页用 <ul>/<li>（链接是列表内容），凭面页直接把 .card 放进去也行。 */
@@ -110,8 +115,12 @@ video {
   list-style: none;
 }
 
-.grid > li { display: flex; }
-.grid > li > .card { flex: 1; }
+.grid > li {
+  display: flex;
+}
+.grid > li > .card {
+  flex: 1;
+}
 
 .card {
   display: flex;
@@ -126,9 +135,16 @@ video {
   text-decoration: none;
   border: 0.25rem solid var(--line);
 }
-.card:active { background: var(--fg); color: var(--bg); }
+.card:active {
+  background: var(--fg);
+  color: var(--bg);
+}
 
-.card-title { font-size: var(--fs-body); font-weight: 600; text-align: center; }
+.card-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  text-align: center;
+}
 
 .icon {
   width: 1.7em;
@@ -142,10 +158,16 @@ video {
   stroke-linejoin: miter;
 }
 
-.card .icon { width: 3.2rem; height: 3.2rem; stroke-width: 1.6; }
+.card .icon {
+  width: 3.2rem;
+  height: 3.2rem;
+  stroke-width: 1.6;
+}
 
 /* 所有可点元素：去掉双击缩放的 300ms 等待，墨水屏上这 300ms 能感觉到 */
-:where(a, button, textarea, input) { touch-action: manipulation; }
+:where(a, button, textarea, input) {
+  touch-action: manipulation;
+}
 
 :where(a, button, textarea, input):focus-visible {
   outline: 0.3rem solid var(--fg);

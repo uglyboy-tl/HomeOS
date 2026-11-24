@@ -13,7 +13,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;      /* 页面本身不滚，只有对话区滚 */
+  overflow: hidden; /* 页面本身不滚，只有对话区滚 */
 }
 
 /* 顶部：返回 + 三个模式，和米家页同一套排法 */
@@ -32,7 +32,10 @@
   border-right: 0.1rem solid var(--line);
   font-size: 2.2rem;
 }
-.agent-tabs { display: flex; flex: 1 1 auto; }
+.agent-tabs {
+  display: flex;
+  flex: 1 1 auto;
+}
 .agent-tabs button {
   flex: 1;
   border: 0;
@@ -43,8 +46,13 @@
   font-size: 2.2rem;
   font-weight: 700;
 }
-.agent-tabs button:last-child { border-right: 0; }
-.agent-tabs button[aria-current='true'] { background: var(--fg); color: var(--bg); }
+.agent-tabs button:last-child {
+  border-right: 0;
+}
+.agent-tabs button[aria-current="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
 /* 「新对话」贴在输入框上方、右对齐：宽度和「发送」一样，右边缘对齐，
    视觉上跟输入条是同一列，又不跟主操作抢位置 */
 .agent-actions {
@@ -63,11 +71,14 @@
   font: inherit;
   font-size: 1.7rem;
 }
-.agent-actions .agent-new:active { background: var(--fg); color: var(--bg); }
+.agent-actions .agent-new:active {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* 对话区：唯一允许滚动的地方（聊天内容会超过一屏） */
 .agent-log {
-  flex: 1 1 0;           /* 基准 0：内容再多也不会把这一块撑高 */
+  flex: 1 1 0; /* 基准 0：内容再多也不会把这一块撑高 */
   min-height: 0;
   overflow-y: auto;
   padding: var(--gap);
@@ -76,9 +87,13 @@
   gap: var(--gap);
   font-size: var(--fs-body);
   line-height: 1.5;
-  overscroll-behavior: contain;   /* 滑到底不要带动整页 */
+  overscroll-behavior: contain; /* 滑到底不要带动整页 */
 }
-.agent-empty { margin: 0; color: var(--fg); }   /* 墨水屏不耍灰：opacity 会抖成噪点 */
+/* 墨水屏不耍灰：opacity 会抖成噪点 */
+.agent-empty {
+  margin: 0;
+  color: var(--fg);
+}
 
 /* 输入条：钉在底部，按钮和输入框同高 */
 .agent-say {
@@ -111,7 +126,10 @@
   font-size: 2rem;
   font-weight: 700;
 }
-.agent-say .send:active { background: var(--fg); color: var(--bg); }
+.agent-say .send:active {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* 对话条目：用户说的、agent 回的、出错、思考中。全用纯黑，靠边框/缩进区分 */
 .agent-say-line {
@@ -121,6 +139,18 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
-.agent-reply { margin: 0; padding-left: var(--gap); white-space: pre-wrap; overflow-wrap: break-word; }
-.agent-note { margin: 0; padding-left: var(--gap); }
-.agent-error { margin: 0; padding-left: var(--gap); border-left: 0.6rem double var(--fg); }
+.agent-reply {
+  margin: 0;
+  padding-left: var(--gap);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.agent-note {
+  margin: 0;
+  padding-left: var(--gap);
+}
+.agent-error {
+  margin: 0;
+  padding-left: var(--gap);
+  border-left: 0.6rem double var(--fg);
+}

@@ -1,9 +1,20 @@
 /* 米家控制页（固定页 web/mijia.html）。只用 tokens.css 的变量与 rem。 */
 
-.mijia { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.mijia {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 
 /* 顶部一行：返回 + 房间标签。当前房间反白 */
-.mijia-rooms { display: flex; align-items: stretch; min-height: 5.8rem; border-bottom: 0.2rem solid var(--line); flex: 0 0 auto; }
+.mijia-rooms {
+  display: flex;
+  align-items: stretch;
+  min-height: 5.8rem;
+  border-bottom: 0.2rem solid var(--line);
+  flex: 0 0 auto;
+}
 /* 返回和房间标签是同一排的兄弟：高度拉满、字号同档、只留一条分隔线 */
 .mijia-rooms .back {
   align-self: stretch;
@@ -13,7 +24,10 @@
   border-right: 0.1rem solid var(--line);
   font-size: 2.2rem;
 }
-.mijia-tabs { display: flex; flex: 1 1 auto; }
+.mijia-tabs {
+  display: flex;
+  flex: 1 1 auto;
+}
 .mijia-rooms button {
   flex: 1;
   min-height: 5.8rem;
@@ -25,8 +39,13 @@
   font-size: 2.2rem;
   font-weight: 700;
 }
-.mijia-rooms button:last-child { border-right: 0; }
-.mijia-rooms button[aria-current='true'] { background: var(--fg); color: var(--bg); }
+.mijia-rooms button:last-child {
+  border-right: 0;
+}
+.mijia-rooms button[aria-current="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* 开关列表：一屏放得下，绝不滚动 */
 .mijia-switches {
@@ -54,8 +73,15 @@
   font-weight: 700;
   text-align: left;
 }
-.dev-row .state { border: 0.2rem solid currentColor; padding: 0.2rem 1.2rem; font-size: 2.4rem; }
-.dev-row.on { background: var(--fg); color: var(--bg); }
+.dev-row .state {
+  border: 0.2rem solid currentColor;
+  padding: 0.2rem 1.2rem;
+  font-size: 2.4rem;
+}
+.dev-row.on {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* 环境信息：固定高度一行「标签 值」，按基线对齐 */
 .mijia-env {
@@ -65,7 +91,10 @@
   border-top: 0.1rem solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-.mijia-env[hidden] { display: none; }   /* 这一间没有环境信息时整条不占位 */
+/* 这一间没有环境信息时整条不占位 */
+.mijia-env[hidden] {
+  display: none;
+}
 .mijia-env > div {
   flex: 1;
   display: flex;
@@ -75,13 +104,36 @@
   min-width: 0;
   white-space: nowrap;
 }
-.mijia-env > div + div { border-left: 0.1rem solid var(--line); }
-.mijia-env > .alarm { background: var(--fg); color: var(--bg); }
-.mijia-env .line { display: flex; align-items: baseline; gap: 0.7rem; }
-.mijia-env .lbl { font-size: 1.6rem; font-weight: 400; }
-.mijia-env .val { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.mijia-env .val.word { font-size: 1.6rem; }   /* 汉字值比数字胖，降一号但保持加粗 */
-.mijia-env .sub { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mijia-env > div + div {
+  border-left: 0.1rem solid var(--line);
+}
+.mijia-env > .alarm {
+  background: var(--fg);
+  color: var(--bg);
+}
+.mijia-env .line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+}
+.mijia-env .lbl {
+  font-size: 1.6rem;
+  font-weight: 400;
+}
+.mijia-env .val {
+  font-size: 1.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* 汉字值比数字胖，降一号但保持加粗 */
+.mijia-env .val.word {
+  font-size: 1.6rem;
+}
+.mijia-env .sub {
+  font-size: 1.9rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 
 /* 出错才出现的黑条，平时不占位置 */
 .mijia-toast {
@@ -94,10 +146,14 @@
   background: var(--fg);
   color: var(--bg);
 }
-.mijia-toast.show { display: block; }
+.mijia-toast.show {
+  display: block;
+}
 
 /* Alpine 起来之前先别显示离线条 */
-[x-cloak] { display: none !important; }
+[x-cloak] {
+  display: none !important;
+}
 
 /* 拉不到状态时的提示条：值照旧显示，但操作停用 */
 .mijia-offline {
@@ -110,4 +166,6 @@
 }
 
 /* 拉不到状态时按钮是原生 disabled：保留墨水屏的黑白外观，只停交互 */
-.dev-row:disabled { opacity: 1; }
+.dev-row:disabled {
+  opacity: 1;
+}

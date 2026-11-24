@@ -10,8 +10,8 @@
    - 值只写变化的字段，Alpine 因此只更新那几个文本节点。 */
 
 const CACHE_KEY = 'mijia/v1';
-const ROOM_KEY = 'mijia/room';   // 上次停在哪间房：与数据缓存分开存，不过期
-const CACHE_MAX_AGE = 12 * 3600 * 1000;   // 超过半天不信缓存
+const ROOM_KEY = 'mijia/room'; // 上次停在哪间房：与数据缓存分开存，不过期
+const CACHE_MAX_AGE = 12 * 3600 * 1000; // 超过半天不信缓存
 const LOST = { text: '读不到', cls: null, sub: null, fault: false };
 
 /* ---- 纯函数：把接口数据变成视图模型 ---- */
@@ -44,19 +44,24 @@ function buildRooms(payload, values) {
   const value = (id) => (values && values[id]) || {};
   return [...byRoom].map(([id, list]) => ({
     id,
-    label: names.get(id) || id,   // 后端给了显示名就用它，id 只是稳定键
+    label: names.get(id) || id, // 后端给了显示名就用它，id 只是稳定键
     switches: list
       .filter((d) => d.kind === 'switch')
       .map((d) => ({
         id: d.id,
         label: d.name,
         on: value(d.id).on === true,
-        bad: Boolean(value(d.id).error),   // 这台读不到：显示「读不到」并禁用
+        bad: Boolean(value(d.id).error), // 这台读不到：显示「读不到」并禁用
         busy: false,
       })),
     sensors: list
       .filter((d) => d.kind !== 'switch')
-      .map((d) => ({ id: d.id, label: d.name, kind: d.kind, ...sensorView(d.kind, values && values[d.id]) })),
+      .map((d) => ({
+        id: d.id,
+        label: d.name,
+        kind: d.kind,
+        ...sensorView(d.kind, values && values[d.id]),
+      })),
   }));
 }
 
@@ -71,16 +76,19 @@ document.addEventListener('alpine:init', () => {
       // 上次停在哪个房间：单独的 key，不受数据缓存 TTL 影响
       lastRoom: Alpine.$persist('').as(ROOM_KEY),
       devicesPayload: null,
-      values: {},                                     // 服务端原始值，rooms 由它派生
-      rooms: [],                                      // 在 start() 里用缓存/接口填一次成型
+      values: {}, // 服务端原始值，rooms 由它派生
+      rooms: [], // 在 start() 里用缓存/接口填一次成型
       cur: hashRoom() || '',
-      stale: false,   // 整次拉取失败 → 显示缓存值但停用操作
+      stale: false, // 整次拉取失败 → 显示缓存值但停用操作
       toast: '',
-      _inflight: false,   // refresh 去重
+      _inflight: false, // refresh 去重
       _timer: null,
 
       get current() {
-        return this.rooms.find((r) => r.id === this.cur) || this.rooms[0] || { switches: [], sensors: [] };
+        return (
+          this.rooms.find((r) => r.id === this.cur) ||
+          this.rooms[0] || { switches: [], sensors: [] }
+        );
       },
 
       async start() {
@@ -100,15 +108,21 @@ document.addEventListener('alpine:init', () => {
           else this.cur = this.rooms.length ? this.rooms[0].id : '';
         }
         addEventListener('hashchange', () => this.pick(hashRoom(), true));
-        setInterval(() => { if (!document.hidden) this.refresh(); }, 120000);
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) this.refresh(); });
+        setInterval(() => {
+          if (!document.hidden) this.refresh();
+        }, 120000);
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) this.refresh();
+        });
         await this.refresh(true);
       },
 
       showToast(msg) {
         this.toast = msg;
         clearTimeout(this._timer);
-        this._timer = setTimeout(() => { this.toast = ''; }, 6000);
+        this._timer = setTimeout(() => {
+          this.toast = '';
+        }, 6000);
       },
 
       async get(url, init) {
@@ -179,7 +193,7 @@ document.addEventListener('alpine:init', () => {
       },
 
       async refresh(withDevices) {
-        if (this._inflight) return;   // 轮询与回到前台撞车时只跑一次
+        if (this._inflight) return; // 轮询与回到前台撞车时只跑一次
         this._inflight = true;
         try {
           if (!this.rooms.length) {
@@ -187,10 +201,7 @@ document.addEventListener('alpine:init', () => {
             await this.loadDevices();
             await this.fetchRoom(this.cur);
           } else {
-            await Promise.all([
-              withDevices ? this.loadDevices() : null,
-              this.fetchRoom(this.cur),
-            ]);
+            await Promise.all([withDevices ? this.loadDevices() : null, this.fetchRoom(this.cur)]);
           }
           this.stale = false;
         } catch (e) {
@@ -204,7 +215,7 @@ document.addEventListener('alpine:init', () => {
       pick(id, fromHash) {
         if (!id || !this.rooms.some((r) => r.id === id)) return;
         if (id === this.cur) {
-          if (!fromHash) this.refresh(true);   // 再点当前房间 = 手动重拉（含设备清单）
+          if (!fromHash) this.refresh(true); // 再点当前房间 = 手动重拉（含设备清单）
           return;
         }
         this.cur = id;
@@ -215,21 +226,21 @@ document.addEventListener('alpine:init', () => {
       },
 
       async toggle(sw) {
-        if (this.stale || sw.busy || sw.bad) return;   // 离线或读不到时不让点，避免拿旧值乱写
+        if (this.stale || sw.busy || sw.bad) return; // 离线或读不到时不让点，避免拿旧值乱写
         const want = sw.on !== true;
-        sw.busy = true;                      // 期间这一行锁住并显示「…」
+        sw.busy = true; // 期间这一行锁住并显示「…」
         try {
           const body = await this.get('/api/mijia/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: sw.id, on: want }),
           });
-          sw.on = body.on;                   // 服务端读回成功才变色：失败时灯其实没动
+          sw.on = body.on; // 服务端读回成功才变色：失败时灯其实没动
           if (body.on !== want) this.showToast('设备没按预期变化');
           this.values[sw.id] = { on: body.on };
           this.saveCache();
         } catch (e) {
-          this.showToast('失败：' + e.message);   // 状态保持原样，不假装成功
+          this.showToast('失败：' + e.message); // 状态保持原样，不假装成功
         } finally {
           sw.busy = false;
         }
