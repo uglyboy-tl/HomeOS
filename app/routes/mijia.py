@@ -25,8 +25,10 @@ def _call(fn, *args) -> dict:
     try:
         return {"ok": True, **fn(*args)}
     except (mijia.UnknownSwitch, mijia.UnknownRoom) as e:
+        log.warning("请求无效：%s", e)
         raise HTTPException(400, str(e)) from e
     except mijia.MijiaError as e:
+        log.warning("米家不可用：%s", e)
         raise HTTPException(503, str(e)) from e
     except Exception as e:  # noqa: BLE001 — 云接口的失败种类不可枚举
         log.exception("米家调用失败")
@@ -41,7 +43,9 @@ def api_state(room: str | None = None):
 
 @router.post("/api/mijia/switch")
 def api_switch(req: SwitchReq):
-    return _call(mijia.set_switch, req.id, req.on)
+    out = _call(mijia.set_switch, req.id, req.on)
+    log.info("switch %s → %s", req.id, out["on"])
+    return out
 
 
 @router.post("/api/mijia/say")
@@ -49,7 +53,9 @@ def api_say(req: SayReq):
     """让音箱念一句话（文本在小米云端合成）。"""
     if not req.text.strip():
         raise HTTPException(400, "播报文本是空的")
-    return _call(mijia.say, req.text)
+    out = _call(mijia.say, req.text)
+    log.info("say %d 字", len(out["text"]))
+    return out
 
 
 @router.get("/api/mijia/devices")
