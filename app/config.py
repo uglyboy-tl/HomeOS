@@ -33,5 +33,16 @@ OC_SERVER_PASSWORD = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
 # 启动时后台预热米家（登录 + 设备列表约 0.8s，别让第一个请求付这笔钱）
 WARM_MIJIA = os.environ.get("HOMEOS_WARM_MIJIA") == "1"
 
+# 语音识别：Azure 实时 WS。HOST 是区域端点，不带协议与路径
+ASR_HOST = (
+    os.environ.get("HOMEOS_ASR_HOST", "")
+    .removeprefix("https://")
+    .removeprefix("wss://")
+    .rstrip("/")
+)
+ASR_KEY = os.environ.get("HOMEOS_ASR_KEY", "")
+ASR_LANG = os.environ.get("HOMEOS_ASR_LANG", "zh-CN")  # Azure 只认完整 locale，裸 zh 会 400
+ASR_TIMEOUT = float(os.environ.get("HOMEOS_ASR_TIMEOUT", "10"))
+
 # 本地开发：非 DEV 才挂 /_docs、才信任"没有反向代理"
 DEV = os.environ.get("HOMEOS_DEV") == "1"

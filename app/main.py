@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import config, runtime
-from .routes import agent, health, mijia, oc, pages
+from .routes import agent, asr, health, mijia, oc, pages
 from .services import agent as agent_service
 from .services import mijia as mijia_service
 
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     agent.install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(mijia.router)
+    app.include_router(asr.router)
     app.include_router(agent.router)
     app.include_router(oc.router)
     app.include_router(pages.router)
