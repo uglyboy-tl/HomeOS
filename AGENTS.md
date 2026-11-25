@@ -14,11 +14,13 @@ app/                     镜像内 Python（只读）
   scan.py                扫 web/pages/*/meta.json，给首页与 /api/pages 用
   routes/
     pages.py             /  /mijia  /agent  /p/<slug>  /assets/*  /pages/<slug>/assets/*
-    mijia.py             米家：/api/mijia/state  /api/mijia/switch（sync def）
+    mijia.py             米家：/api/mijia/state  /api/mijia/switch  /api/mijia/say（sync def）
+    asr.py               语音识别：WS /api/asr/stream（转给 Azure，推 partial）
     oc.py                /oc/* → opencode（注入上游 Basic，SSE 逐块转发；路由本身不认证）
     health.py            /api/ready  /api/pages
   services/
-    mijia.py             设备表 + 三级缓存 + 写后读回确认
+    mijia.py             设备表（解析 + mtime 缓存）+ 三级缓存 + 写后读回确认 + 播报
+    asr.py               Azure 实时识别：WS 帧格式、共用 X-RequestId
     opencode.py          读密码、拼 URL、Basic 头
   _proxy.py              /oc 用的反代（流式/非流式同一份）
   runtime.py             关服务时让 SSE 生成器退出
@@ -28,7 +30,7 @@ web/                     前端，纯静态零构建
   mijia.html             米家：房间标签 + 开关行 + 环境条（assets/mijia.{css,js}）
   agent.html             助手：聊天/设计/高级三个模式 + 对话区 + 输入条（仅前端，未接后端）
   assets/                tokens.css（唯一皮肤）、icons.svg、home.js、mijia.{css,js}、agent.{css,js}、
-                         page.template.html（功能页起手模板）
+                         page.template.html（功能页起手模板）、recorder-worklet.js（录音）
   pages/                 ★卷 1：功能页目录（agent 唯一能写的地方）
     <slug>/index.html    页面本体（完整独立 HTML）
     <slug>/meta.json     {"title","icon","order"}
@@ -82,7 +84,7 @@ docker compose up -d --build                          # 镜像只支持 arm64
 
 | 端口 | 作用 |
 |---|---|
-| 8080 | 唯一对外入口：页面、`/api/*`、`/oc` 反代 |
+| 8080 | 容器内监听：页面、`/api/*`、`/oc` 反代。本机 dev 直接开在 127.0.0.1；部署时**不发布到宿主**，由 Traefik 按域名转发（`homeos.uglyboy.cn`） |
 | 14100 | opencode serve，只听 127.0.0.1（外部只能经 `/oc`） |
 
 容器：`read_only: true`，`/tmp` 走 tmpfs；卷只有 `./web/pages`（功能）与 `./data`（运行时状态）。
@@ -120,7 +122,13 @@ docker compose up -d --build                          # 镜像只支持 arm64
   `$HOMEOS_DATA_DIR/mijia/state.json`；读失败退回旧值并标 `stale`。落盘缓存的作用是
   **同一次运行内**多个房间/页面共享一次云读取（容器里 `/data` 是 tmpfs，重启即清）；
   去掉它每个房间都要各自等云。
+- **播报是助手这一轮的副产品**：`services/agent.py` 的 `resync()` 一旦确认"完成且有正文"，
+  就把正文压成能念的一句话（去代码块/链接，截 `SAY_MAX`）丢给 `mijia.say`，同一段只念一次
+  （`st["spoken"]` 先记再播，多客户端同时 `turn()` 也只响一遍）。播报失败只记日志，不影响结果。
 - **`get_devices_list` 只在首次调一次**（每次约 0.8s，缓存成常量）。新增设备要重启服务。
+- **语音输入只在桌面/常规浏览器可用**：`/api/asr/stream` 走 Azure 实时 WS（一轮音频必须共用同一个
+  `X-RequestId`，每帧换 id 云端只回 `turn.start`）。但 inkPalm 的 EinkBro（WebView）交付给页面的
+  音频是断续带丢块的（同一段录回来重放给 Azure 也识别不出），**设备上只能靠系统输入法的语音**。
 - **墨水屏开销**：轮询 ≥ 60s 且只在可见时；不要 SSE 逐字、不要时钟、不要 hover；
   例外只有一个：助手页的模型输出用 SSE 推，但**服务端限流 4 次/秒**、页面只在文本变化时重绘
   （逐 token 刷会糊屏，4 次/秒等于手写输入法的观感）；
@@ -163,6 +171,8 @@ docker compose up -d --build                          # 镜像只支持 arm64
 - `/oc` 把请求转给有 shell 权限的 agent，**故意不做认证**（内网自用，2026-11 决定）：
   加口令挡不住同网段能看页面源码的人，只增加维护面。代价是“能连 8080 就能让 agent 跑命令”，
   所以 **`/oc` 绝不能暴露到公网**；真要出内网，先在反代层补认证/限源。
+  目前 `homeos.uglyboy.cn` 的公开 A 记录指向 `192.168.0.100`（私网，公网不可路由，无 AAAA），
+  所以只在内网可达；**加公网 A/AAAA 或开 VPN 回家之前**，必须给 `/oc` 与 `/api/asr/stream` 加认证。
 - `HOMEOS_DEV=1` 只在本机（决定 `/_docs` 与静态资源是否 `no-store`），容器里不设。
 - `.dockerignore` 排掉 `web/pages/*`（那是卷），镜像里只建空目录。
 

@@ -29,7 +29,7 @@
 ./docker/entrypoint.sh restart web   # web|agent|all
 ./docker/entrypoint.sh status|log|down
 
-uv run pytest -q                     # 59 条，不联网
+uv run pytest -q                     # 74 条，不联网
 uv run ruff check . && uv run ruff format .
 bunx @biomejs/biome@2.6.8 check --write .   # 前端（web/ 下的固定页与 assets）lint + 格式化
 ```
