@@ -1,20 +1,13 @@
-/* 米家控制页的数据层（结构在 mijia.html 里，由 Alpine 渲染）。
-   接口只给数据：
-     /api/mijia/devices     —— 房间顺序 + 每台设备的 id/name/room/kind（不碰云）
-     /api/mijia/state?room= —— 只那一间房的数值：开关 {on}、温湿度 {temperature,humidity}、
-                                烟感 {status,fault,battery}
-
-   这里最要紧的是「别多画」（墨水屏每多画一次都是可见的一闪）：
-   - 首帧用 localStorage 里的上次结果（start() 里一次赋值），再拉当前房间覆盖。
-   - 设备清单没变就不碰 rooms；变了才重建，重建时用已有 values 播种。
-   - 值只写变化的字段，Alpine 因此只更新那几个文本节点。 */
+/* 米家控制页的数据层（结构在 mijia.html，Alpine 渲染）。
+   墨水屏上每多画一次都是可见的一闪，所以：首帧用 localStorage 上次结果，只写变化的字段，
+   清单没变不重建 rooms。 */
 
 const CACHE_KEY = 'mijia/v1';
 const ROOM_KEY = 'mijia/room'; // 上次停在哪间房：与数据缓存分开存，不过期
 const CACHE_MAX_AGE = 12 * 3600 * 1000; // 超过半天不信缓存
 const LOST = { text: '读不到', cls: null, sub: null, fault: false };
 
-/* ---- 纯函数：把接口数据变成视图模型 ---- */
+/* ---- 纯函数：接口数据 → 视图模型 ---- */
 
 function sensorView(kind, value) {
   // 缺值/失败/只有半个字段都算“读不到”：不能把没拿到的数当 0 或“正常”

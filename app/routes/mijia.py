@@ -1,8 +1,4 @@
-"""米家：设备表、状态、开关（/api/mijia/*）。
-
-全部是 sync def（走线程池）：mijiaAPI 一次读回约 1 秒，写成 async def 会堵住事件循环。
-`/api/mijia/devices` 只读设备表、不碰云，所以是毫秒级。
-"""
+"""米家接口。全部 sync def：mijiaAPI 一次读回约 1 秒，async def 会堵住事件循环。"""
 
 import logging
 

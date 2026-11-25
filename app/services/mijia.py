@@ -1,10 +1,7 @@
-"""米家：设备表（读 config/mijia.yaml）+ 读状态、写开关、让播报音箱念话。
+"""米家：设备表（config/mijia.yaml）+ 读状态、写开关、播报。
 
-设备表的格式见 config/README.md。分成两段：解析校验（写完就只读）与云 I/O（带缓存）。
-调用方都在线程池里（routes/mijia.py 的 sync def），别把这里改成 async。
-
-锁的边界：`_cache_lock` 只罩缓存字典与内存映射，不罩网络 I/O；同一台设备的云端
-调用用它的 `_device_lock` 串行（mijiaDevice 共用一条 requests 会话，不能交错）。
+调用方在线程池里（routes 是 sync def），别改成 async。锁的边界：`_cache_lock` 只罩缓存字典，
+同一台设备用 `_device_lock` 串行（mijiaDevice 共用一条 requests 会话）。
 """
 
 from __future__ import annotations
@@ -61,10 +58,7 @@ class UnknownRoom(LookupError):
     """请求里的房间不在设备表里。"""
 
 
-# ---------------------------------------------------------------- 设备表
-# 结构是「房间 → 设备」两级，外加顶层 `tts`（播报认哪台音箱）。
-# 没有 kind 的是开关，kind 为 th/smoke 的是传感器。解析完就不再防御。
-
+# 顶层 `tts` 指播报音箱；没有 kind 的是开关，th/smoke 是传感器
 KIND_PROPS = {"th": ("temperature", "humidity"), "smoke": ("status", "battery")}
 SEP = "/"  # 房间/设备 拼 id 用，所以名字里不能有它
 
@@ -155,11 +149,7 @@ def _parse(doc) -> dict:
 
 
 def _load_table() -> dict:
-    """读设备表。按 mtime 缓存，改完下一次请求就是新的。
-
-    返回 {"rooms": [{id,label,switches:[...],sensors:[...]}],
-          "switches": {id: 开关}, "sensors": {id: 传感器}, "tts": {did} 或 None}。
-    """
+    """读设备表（按 mtime 缓存）：房间顺序 + 开关/传感器索引 + 顶层 tts。"""
     global _table_cache
     path = Path(config.MIJIA_CONFIG)
     try:
@@ -175,9 +165,6 @@ def _load_table() -> dict:
     data = _parse(doc)
     _table_cache = (mtime, data)
     return data
-
-
-# ---------------------------------------------------------------- 缓存
 
 
 def _load_disk() -> None:
@@ -234,9 +221,6 @@ def _cached(key: str, ttl: float, fetch: Callable[[], dict]) -> dict:
     return value
 
 
-# ---------------------------------------------------------------- 设备
-
-
 def _client():
     """懒加载 mijiaAPI：没登录/没装也只影响米家页，不影响别的页面。"""
     global _api
@@ -288,9 +272,6 @@ def _read(did: str, prop: str):
         return _dev(did).get(prop)
 
 
-# ---------------------------------------------------------------- 数据
-
-
 def _sensor_values(sensor: dict) -> dict:
     """传感器的原始数值。显示成「24.4° 34%」是前端的事，这里只给数。"""
     did, props = sensor["did"], sensor["props"]
@@ -323,10 +304,7 @@ def _switch_values(sw: dict) -> dict:
 
 
 def devices() -> dict:
-    """设备清单（纯数据，不碰云）：房间顺序 + 每台设备的 id/名字/房间/类型。
-
-    任何前端（网页、ESP32、别的脚本）都用这一份，怎么排版由它们自己决定。
-    """
+    """设备清单（纯数据，不碰云），任何前端都用这一份，排版由它自己定。"""
     table = _load_table()
     rooms = [{"id": room["id"], "name": room["label"]} for room in table["rooms"]]
     items = []
@@ -348,13 +326,7 @@ def devices() -> dict:
 
 
 def read_state(room: str | None = None) -> dict:
-    """读状态：按设备 id 给原始值，不含任何显示格式。
-
-    `room` 给定时只读那一间。**同一间房里的设备并行读**：一次云调用约 150ms，
-    串行等五台就是 750ms，并行只要一个往返。
-    每台设备自己一条缓存键（开关 3s、温湿度 300s、烟感 900s），一台失败只标自己；
-    同设备的并发用它的 `_device_lock` 串行（mijiaDevice 共用一条会话，不能交错）。
-    """
+    """按设备 id 给原始值（不含显示格式）。`room` 只读一间；同房间并行读，失败只标自己。"""
     _client()  # 没登录就在这一行失败，别等到每个设备各失败一次
     rooms = _load_table()["rooms"]
     if room is not None:
@@ -390,10 +362,7 @@ SAY_MAX = 200  # 一次播报的文本上限（实测 280 字也接受，留余�
 
 
 def say(text: str) -> dict:
-    """让播报音箱念一句话（设备表顶层 `tts`）：文本当动作参数，合成在小米云端做。
-
-    只回"已下发"：云端没有播放回执，`code` 只代表指令被接受。
-    """
+    """让播报音箱念一句；只回"已下发"，云端没有播放回执。"""
     tts = _load_table()["tts"]
     if tts is None:
         raise MijiaError("没配播报音箱（config/mijia.yaml 顶层的 tts）")

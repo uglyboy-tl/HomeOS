@@ -1,7 +1,5 @@
-/* 首页：固定页写死在 HTML 里，功能页（web/pages/<slug>/）从 /api/pages 追加。
-
-   按 web/DESIGN.md 的 P1：先把上次的清单从 localStorage 画上，再拉接口覆盖。
-   卡片按 slug 复用，清单没变就不动 DOM；只有增删/改序才重建那部分。 */
+/* 首页：固定页写死在 HTML 里，功能页从 /api/pages 追加。先画缓存清单再对账，
+   卡片按 slug 复用，不需要动就不碰 DOM。 */
 
 const CACHE_KEY = 'home/pages/v1';
 const CACHE_MAX_AGE = 12 * 3600 * 1000;

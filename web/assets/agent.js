@@ -1,13 +1,5 @@
-/* 助手页：三个模式各走一个 agent（chat / pages / device），全部通过后端 /api/agent/*。
-
-   显示规则（按 opencode 实际状态收敛过）：
-   - 发送后只有一句「正在工作…」：chat 没思考链，pages/device 会长时间思考或调工具，
-     页面不跟着猜"在思考还是在干活"。
-   - 正文有多少显示多少：优先 SSE（后端限流 4 次/秒），不支持就轮询；文本没变不碰 DOM。
-   - 只有最近一轮：新的一轮直接替掉旧的。
-
-   持久化（照 kiosk 的做法）：模式与每个模式最后那一轮存 localStorage，进来先画缓存，
-   再向服务器对账——墨水屏上第一帧就有内容，且内容没变时不会二次重绘。 */
+/* 助手页：三个模式各走一个 agent（chat / pages / device），全部走后端 /api/agent/*。
+   只显示最近一轮；模式与各模式最后一轮存 localStorage，进来先画缓存再对账。 */
 (() => {
   const tabs = document.querySelector('.agent-tabs');
   const log = document.querySelector('.agent-log');
@@ -34,7 +26,7 @@
   let epoch = 0; // 切模式/新对话 +1，让旧的轮询与 SSE 作废
   let liveClose = null; // 当前那条 SSE 的收尾函数：作废时必须主动关，否则连接一直挂着
 
-  /* ---- 本地缓存：模式 + 每个模式最后那一轮 ---- */
+  /* 本地缓存：模式 + 每个模式最后那一轮 */
 
   function read(key) {
     try {
@@ -66,7 +58,7 @@
     }
   }
 
-  /* ---- 渲染：一轮 = 用户那句 + 正文 + 状态 ---- */
+  /* 渲染：一轮 = 用户那句 + 正文 + 状态 */
 
   const DOM = { user: null, reply: null, note: null };
 
@@ -117,7 +109,7 @@
     log.scrollTop = log.scrollHeight;
   }
 
-  /* ---- 请求 ---- */
+  /* 请求 */
 
   async function api(path, body) {
     const init =
@@ -267,7 +259,7 @@
     say.style.height = say.scrollHeight + 'px';
   }
 
-  /* ---- 交互 ---- */
+  /* 交互 */
 
   tabs.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-mode]');
@@ -281,9 +273,7 @@
     load();
   });
 
-  /* ---- 语音输入：点一次开始录、再点一次结束 ----
-     边说边出字（后端把 Azure 的中间结果推回来），结束时把最终文本填进输入框，
-     不自动发送。麦克风要 secure context：https 或 localhost，否则 getUserMedia 直接拒。 */
+  /* 语音输入：点一次开始、再点一次结束；边说边出字，结束把最终文本填进输入框，不自动发送。 */
 
   const MIC_ERROR = '拿不到麦克风（要 https 或 localhost，并允许麦克风权限）';
 

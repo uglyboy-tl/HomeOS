@@ -1,12 +1,9 @@
-"""语音识别：Azure 实时（会话模式 WebSocket）。
+"""Azure 实时识别（会话模式 WS）。只支持这一家：换供应商等于换协议。
 
-浏览器按 100ms 一帧推 16kHz 单声道裸 PCM；这里转发给 Azure，把中间结果与最终结果
-交给回调。只支持这一家：换供应商等于换协议，没必要提前抽象。
-
-微软没有公开的裸 WS 协议文档（只能照 SDK 行为逆推），所以几个必须守住的点写在这里：
-- **一轮音频共用同一个 `X-RequestId`**：每帧换 id，云端会把每帧当成新的一轮，只回 turn.start；
-- 音频帧是「2 字节大端头部长度 + 头部 + 裸 PCM」，头部含 `Path:audio`；
-- 文本帧是「头部 + 空行 + JSON」，`speech.config` 要先发，声明采样率与位深。
+微软没公开裸 WS 文档（照 SDK 逆推），三个必须守住的事实：
+- 一轮音频共用同一个 `X-RequestId`（每帧换 id，云端只回 turn.start）；
+- 音频帧 = 2 字节大端头长 + 头（含 `Path:audio`）+ 裸 PCM；
+- 文本帧 = 头 + 空行 + JSON，`speech.config` 先发，声明采样率。
 """
 
 from __future__ import annotations
@@ -109,10 +106,7 @@ def _stream_url() -> str:
 
 
 class Session:
-    """一轮识别：`send()` 推 PCM，`finish()` 收尾并返回最终文本。
-
-    中间结果通过 `on_partial` 回调交给调用方；回调在后台读协程里跑，不要在里面做重活。
-    """
+    """一轮识别：`send()` 推 PCM，`finish()` 收尾回最终文本；中间结果走 `on_partial` 回调。"""
 
     def __init__(
         self,

@@ -1,8 +1,4 @@
-"""助手接口：/api/agent/*。
-
-页面用 /turn（轮询兜底）、/stream（SSE 逐字）、/say、/new；测试台用 /ask、/info、/trace、
-/bind、/model 直接验证 opencode 的 agent 与模型配置。
-"""
+"""助手接口 /api/agent/*：页面用 turn/stream/say/new，测试台用 ask/info/trace/bind/model。"""
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -14,10 +10,7 @@ router = APIRouter()
 
 
 def install_error_handlers(app) -> None:
-    """把领域异常统一映射成 HTTP：模式不认识 400，opencode 不可用 503。
-
-    放在这里而不是每个 endpoint 里 try/except：九条路由不该抄同一段映射。
-    """
+    """领域异常 → HTTP：未知模式 400，opencode 不可用 503。"""
 
     @app.exception_handler(agent.UnknownMode)
     async def _unknown_mode(_request, exc):
@@ -86,9 +79,6 @@ async def api_stream(request: Request, mode: str = "chat"):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
-
-
-# ---------- 测试台 ----------
 
 
 @router.get("/api/agent/info")

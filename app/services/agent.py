@@ -1,13 +1,7 @@
-"""助手：页面模式 → opencode agent 的薄门面。
+"""助手：页面模式 → opencode agent 的门面。
 
-只做四件事：分模式建会话、把话发出去、把本轮状态（含增量文本）攒起来、把 opencode 的
-错误翻成人话。历史永远从 opencode 读，这里不存消息、不落盘。
-
-两个数据来源，各管一段：
-- SSE 事件：正文增量（唯一能逐字上屏的来源，消息要等步骤结束才落库）；
-- 消息列表：权威结果（结束时校对一次，SSE 掉线时也能还原）。
-
-前端怎么拿由它决定：页面走 /api/agent/stream（限流 4 次/秒）或轮询，测试台走 /ask 同步接口。
+两个数据来源：SSE 给增量正文（消息要等步骤结束才落库），消息列表给权威结果。
+历史永远从 opencode 读，这里不存消息、不落盘。
 """
 
 import asyncio
@@ -59,9 +53,6 @@ def _blank(agent: str | None = None) -> dict:
 _state: dict[str, dict] = {mode: _blank() for mode in MODES}
 
 
-# ---------- opencode HTTP ----------
-
-
 async def _call(method: str, path: str, body: dict | None = None, timeout: float = 30.0) -> dict:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -104,9 +95,6 @@ def human_error(message: str) -> str:
     return "助手出错了：" + message[:80]
 
 
-# ---------- 消息列表 → 本轮结果 ----------
-
-
 def _ordered(messages: list[dict]) -> list[dict]:
     """opencode 的 /message 是最新在前；这里统一成时间正序。"""
     return sorted(
@@ -146,9 +134,6 @@ def summarize(messages: list[dict], after: str = "") -> dict | None:
         elif finish and finish not in ("stop", "tool-calls"):
             error = human_error("")  # 没有 error 对象但收尾异常：别当成"还在跑"
     return {"question": _text(ordered[last_user]), "text": text, "done": done, "error": error}
-
-
-# ---------- 会话与本轮状态 ----------
 
 
 def check(mode: str) -> dict:
@@ -284,9 +269,6 @@ async def turn(mode: str) -> dict:
     return _snapshot(mode)
 
 
-# ---------- opencode SSE：增量文本的唯一来源 ----------
-
-
 def _handle(event: dict) -> None:
     kind = event.get("type") or ""
     data = event.get("data") or {}
@@ -349,9 +331,6 @@ async def run_subscriber(stop: asyncio.Event) -> None:
             backoff = min(backoff * 2, 8)
 
 
-# ---------- 给前端：SSE 与同步提问 ----------
-
-
 async def stream(mode: str):
     """按变化推本轮状态；没变化就不发（避免无意义的整屏刷新）。"""
     check(mode)
@@ -386,9 +365,6 @@ async def ask(mode: str, text: str, timeout: float = 90.0) -> dict:
         "tokens": (last or {}).get("tokens"),
         "cost": (last or {}).get("cost"),
     }
-
-
-# ---------- 测试台：验证 opencode 配置用 ----------
 
 
 def compact(messages: list[dict], limit: int = 20) -> list[dict]:

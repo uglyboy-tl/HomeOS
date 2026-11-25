@@ -1,9 +1,4 @@
-"""语音识别：WS `/api/asr/stream`。
-
-浏览器一边说话一边推二进制（16kHz 单声道 16bit 裸 PCM），这里转给 Azure，
-把中间结果按 `{"partial": "..."}` 推回去；说完推一条文本 `end`，再回 `{"text": "..."}` 并关连接。
-出错回 `{"error": "..."}`。
-"""
+"""WS `/api/asr/stream`：二进制帧上行转 Azure，`{"partial"}` 推回去；`end` 收尾后回 `{"text"}`。"""
 
 import contextlib
 import logging
