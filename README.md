@@ -1,9 +1,14 @@
 # homeos
 
-家里的屏的网页服务：一台 NAS 上跑一个容器，墨水屏（inkPalm 5、Kindle 第三方浏览器）打开就是家里的面板；
-家庭 agent 在容器里改页面，加一个功能就是加一个目录。
+家庭局域网的能力网关，跑在 NAS 的一个容器里：**后端是主体**（米家设备控制、家庭 agent、
+语音识别与播报），**web 只是它的第一个消费者**——墨水屏（inkPalm 5、Kindle 第三方浏览器）
+打开就是家里的一面面板，孩子说一句/点一下，容器里的 agent 就改一页。
 
-- **架构与取舍：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**（部分章节已落后于代码，见文件开头）
+它只包"别处做不了或做起来贵"的能力：设备与执行（米家的坑）、智能（agent/ASR/播报）、
+聚合（一次请求拿到家里状态）。Jellyfin、Immich、Miniflux 这些已有成熟 API 的服务不包一层——
+局域网里的其他程序直接调它们就好。
+
+- **定位、接口契约与取舍：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
 - 前端设计规范（缓存优先、Alpine 用法、刷新原则）：[`web/DESIGN.md`](web/DESIGN.md)
 - 米家设备表怎么写：[`config/README.md`](config/README.md)
 - 代码原则与已知的坑：[`AGENTS.md`](AGENTS.md)
@@ -14,11 +19,12 @@
 |---|---|
 | `/` | 首页宫格：固定页写死，功能页从 `/api/pages` 追加 |
 | `/mijia` | 米家：房间标签 + 开关 + 温湿度/烟感；缓存首帧 + 只拉当前房间的设备 |
-| `/agent` | 助手：聊天/设计/高级三个模式 + 对话区 + 输入条（只有前端，未接后端） |
+| `/agent` | 助手：聊天/设计/高级三个模式 + 对话区 + 语音输入；后端是 `/api/agent/*` |
 | `/p/<slug>` | agent 写的功能页（`web/pages/<slug>/`），一个目录一页 |
 
-接口：`/api/mijia/devices`、`/api/mijia/state?room=客厅`、`/api/mijia/switch`、`/api/pages`、`/api/ready`、
-`/oc/*`（opencode 反代，**不做访问认证**，见下）。
+接口分三类（详见 `docs/ARCHITECTURE.md` §2、§6）：**通用能力**（`/api/mijia/*`，局域网内其他应用
+可以直接调，只加不改）、**会话型**（`/api/agent/*`、`/api/asr/stream`，只给自家页面）、
+**页面私有**（静态页面与 `/api/pages`）。`/oc/*` 是 opencode 反代，**必须带 `X-HomeOS-Token`**。
 
 只有一种皮肤（墨水屏）：纯黑白、零动画、rem 缩放，`web/assets/tokens.css` 是唯一的样式基线。
 
@@ -114,12 +120,23 @@ docker compose pull && docker compose up -d
 
 前提：仓库已推到 GitHub（现在还没有 remote）。
 
-## `/oc` 不做认证（有意的取舍）
+## 认证：自家页面免输入，其他设备要令牌
 
-`/oc` 把请求转给容器里的 agent，而 agent 有 shell 权限。这里**不设口令**：
-这套东西只在内网跑，页面就在同一个局域网里，加口令既挡不住想进的人（口令必然落在
-页面或同一个网络里），又多一份要维护的东西。代价是：**能连上 8080 的人就能让 agent
-跑命令**。要暴露到公网之前，先在反代层补认证/限源，而不是在这个路由上。
+| 谁 | 怎么过 | 体验 |
+|---|---|---|
+| 自家前端（任何浏览器打开页面） | 页面响应种 `HttpOnly; SameSite=Strict` 的 `homeos` cookie（值是令牌的 HMAC 派生值，不是原文），之后 fetch 自动带上 | 零感知，页面代码里没有令牌 |
+| 其他设备/程序 | 请求头 `X-HomeOS-Token: $HOMEOS_TOKEN` | 一行 header |
+| `/api/ready` | 不认证 | 容器健康检查用 |
+| `/oc` | 只认请求头（等于 shell 权限，cookie 不行）；未配令牌 → 403 关闭 | — |
+
+`HOMEOS_TOKEN` 没配时：页面与 `/api/*` 照常可用（本机开发），`/oc` 关闭。生成：
+`openssl rand -hex 24`。
+
+这层挡的是误用与扫描，**不是**定向攻击——任何能 GET 页面的人都拿得到合法 cookie（只是调不了 `/oc`）。
+主边界在网络层：
+家里有公网 IPv6，Traefik 听 `[::]:443` 且证书是泛域名，用 `movie.uglyboy.cn` 的 AAAA 就能拿到
+家庭地址，再拿 `Host: homeos.uglyboy.cn` 打进来（2026-11 实测从公网侧返回 200）。所以 Traefik
+上要补 `ipAllowList`（只放内网段）。
 
 ## 没做的
 
