@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -26,6 +27,10 @@ STREAM_TICK = 0.25  # 秒：SSE 推送上限（4 次/秒，够"逐字"又不至�
 
 class UnknownMode(Exception):
     """页面传了不认识的模式。"""
+
+
+class AskTimeout(Exception):
+    """`ask` 没在给定时间内跑完（上游还活着，只是慢）。"""
 
 
 class AgentError(Exception):
@@ -53,14 +58,20 @@ def _blank(agent: str | None = None) -> dict:
 _state: dict[str, dict] = {mode: _blank() for mode in MODES}
 
 
-async def _call(method: str, path: str, body: dict | None = None, timeout: float = 30.0) -> dict:
+async def _call(
+    method: str,
+    path: str,
+    body: dict | None = None,
+    timeout: float = 30.0,
+    timeout_error: type[Exception] = AgentError,
+) -> dict:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.request(
                 method, opencode.url(path), json=body, headers=opencode.headers()
             )
     except httpx.TimeoutException as e:
-        raise AgentError(f"opencode 没在 {timeout:g}s 内回话") from e
+        raise timeout_error(f"opencode 没在 {timeout:g}s 内回话") from e
     except httpx.HTTPError as e:
         raise AgentError(f"opencode 连不上：{e}") from e
     if resp.status_code >= 400:
@@ -143,14 +154,18 @@ def check(mode: str) -> dict:
         raise UnknownMode(mode) from None
 
 
-async def _create_session(mode: str) -> str:
-    st = _state[mode]
-    data = await _call("POST", "/api/session", {"agent": st["agent"] or MODES[mode]})
+async def _new_session(agent: str) -> str:
+    data = await _call("POST", "/api/session", {"agent": agent})
     sid = (data.get("data") or {}).get("id")
     if not sid:
         raise AgentError("建会话失败")
-    st["session_id"] = sid
     return sid
+
+
+async def _create_session(mode: str) -> str:
+    st = _state[mode]
+    st["session_id"] = await _new_session(st["agent"] or MODES[mode])
+    return st["session_id"]
 
 
 async def ensure_session(mode: str) -> str:
@@ -241,7 +256,7 @@ async def _speak(text: str) -> None:
     if not said:
         return
     try:  # 播报是锦上添花：失败只记日志，别影响这一轮的结果
-        log.info("播报：%s", said[:24])
+        log.info("播报 %d 字", len(said))  # 不落正文：docker 日志会留在宿主上
         await asyncio.to_thread(mijia.say, said)
     except Exception as e:  # noqa: BLE001 — 云接口 + 设备表，失败种类不可枚举
         log.warning("播报失败：%s", e)
@@ -343,27 +358,49 @@ async def stream(mode: str):
         await asyncio.sleep(STREAM_TICK)
 
 
-async def ask(mode: str, text: str, timeout: float = 90.0) -> dict:
-    """同步问一句：等它跑完再返回，带耗时/token/模型，脚本里直接下判断。"""
+MAX_INPUT = 12_000  # 字符：日志动辄几十 KB，超了截断并在响应里标出来
+MAX_PROMPT = 2_000  # 指令自己写，超了是调用方搞错了
+DEFAULT_PROMPT = "用一两句话说清这段内容里值得注意的事。"
+
+
+async def ask(content: str, prompt: str = "", timeout: float = 60.0, speak: bool = False) -> dict:
+    """给程序用的一次调用：独立会话、跑完即删、不碰页面状态、默认不播报。"""
     started = time.monotonic()
-    await say(mode, text)
-    sid = _state[mode]["session_id"]
+    sid = await _new_session(MODES["chat"])
+    truncated = len(content) > MAX_INPUT
+    head = prompt.strip() or DEFAULT_PROMPT
+    text = f"{head}\n\n<<<内容开始>>>\n{content[:MAX_INPUT]}\n<<<内容结束>>>"
     try:
-        await _call("POST", f"/api/experimental/session/{sid}/wait", timeout=timeout)
-    except AgentError as e:
-        return _snapshot(mode) | {"error": human_error(str(e)), "state": "error"}
-    await resync(mode)
-    rows = await trace(mode, limit=4)
-    last = next((r for r in reversed(rows) if r["type"] == "assistant"), None)
-    snapshot = _snapshot(mode)
-    if last is None:
-        # 等完了却一条 assistant 都没有：多半模型 id/授权不对，opencode 把这一轮直接毙了
-        snapshot.update(state="error", error="没有拿到回复，检查模型配置")
-    return snapshot | {
+        await _call("POST", f"/api/session/{sid}/prompt", {"text": text})
+        # opencode 的 experimental 接口；哪天被删掉，ask 会直接 503
+        await _call(
+            "POST",
+            f"/api/experimental/session/{sid}/wait",
+            timeout=timeout,
+            timeout_error=AskTimeout,
+        )
+        data = await _call("GET", f"/api/session/{sid}/message")
+    finally:
+        with contextlib.suppress(Exception):
+            await _call("DELETE", f"/api/session/{sid}", timeout=5.0)
+    messages = data.get("data") or []
+    rows = [r for r in compact(messages, limit=len(messages)) if r["type"] == "assistant"]
+    answer = next((r for r in reversed(rows) if r["text"].strip()), None)
+    error = next((r["error"] for r in reversed(rows) if r.get("error")), "")
+    if answer is None:
+        # 没有正文：报错优先，否则当模型/授权配置有问题
+        raise AgentError(error or "没有拿到回复，检查模型配置")
+    last = answer
+    if speak:
+        await _speak(last["text"])
+    return {
+        "ok": True,
+        "text": last["text"],
+        "model": last.get("model"),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "model": (last or {}).get("model"),
-        "tokens": (last or {}).get("tokens"),
-        "cost": (last or {}).get("cost"),
+        "tokens": last.get("tokens"),
+        "cost": last.get("cost"),
+        "truncated": truncated,
     }
 
 
