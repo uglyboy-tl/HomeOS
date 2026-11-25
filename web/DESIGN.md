@@ -199,7 +199,7 @@ web/
   ```
   GET  /api/agent/info?mode=     绑定的 agent 与模型
   GET  /api/agent/trace?mode=    消息轨迹（时间正序，带 model/tokens/cost/finish/error_raw）
-  POST /api/agent/ask            {mode,text,timeout} 同步一轮，返回耗时/token/模型
+  POST /api/agent/ask            {input,prompt,timeout,speak} 给程序用：交一段内容拿一段解读
   POST /api/agent/bind           {mode,agent} 临时换 agent（重建会话）
   POST /api/agent/model          {mode,providerID,id,variant} 换模型
   ```

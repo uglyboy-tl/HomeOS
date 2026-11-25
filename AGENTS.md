@@ -40,8 +40,10 @@ tests/  docs/  config/mijia.yaml
 
 **接口分三类，边界不动**（详见 `docs/ARCHITECTURE.md` §2、§6，改了要同步那张契约表）：
 
-- 通用能力（`/api/mijia/*`）：无状态，其他应用可直接调，只加不改。
-- 会话型（`/api/agent/*`、`/api/asr/stream`）：内存态 + 常驻 SSE，只给自家页面，因此 uvicorn 单 worker。
+- 通用能力（`/api/mijia/*`、`/api/mpd/*`、`/api/notify`、`/api/agent/ask`）：无状态，其他应用可直接调，只加不改。
+  这类接口面向的是别的程序（设备控制、通知、音乐），不一定有页面在用；别为了"先有页面"硬造 UI。
+- 会话型（`/api/agent/{turn,stream,say,new,bind,model,info,trace}`、`/api/asr/stream`）：内存态 + 常驻 SSE，只给自家页面，因此 uvicorn 单 worker。
+  `/api/agent/ask` 是例外：一次调用一条独立会话，属上面那一类。
 - 页面私有（静态页面）：只发文件。`/api/ready` 供健康检查，不认证。
 
 新增能力先在 `web/pages/` 里用起来，出现第二个客户端才谈通用化。能被一行 `curl` 直连上游
@@ -89,7 +91,7 @@ bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则�
 | 14100 | opencode serve，只听 127.0.0.1（外部只能经 `/oc`） |
 
 容器 `read_only: true`；`/tmp` tmpfs 512m、`/data` tmpfs 1g（mode=1777，有嵌套绑定挂载时必须显式），
-所以运行时状态不跨重启。绑定只有三处：`./web/pages`（功能）、`./config:ro`（设备表）、
+所以运行时状态不跨重启。绑定只有两处（调试形态再加 app/ web/）：`./web/pages`（功能）、
 `~/.config/mijia-api`（米家登录态，库写死路径）。
 
 ## 不要做
@@ -123,6 +125,8 @@ bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则�
   `session.text.delta`；`done` 可能先到一帧（正文还没有），把它当结束就永远不显示回复。
 - **事件委托**：监听挂容器上，别在渲染时逐个绑——静态 DOM 不会重绑，绑了就点不动。
 - 米家重新登录必须人扫码；`/data` 是 tmpfs，重启后 opencode 会话与米家缓存都会重建。
+- **query 里放中文要 URL 编码**（`?room=客厅`）：HTTP 只允许 ASCII，非 ASCII 在 uvicorn 解析层就被拒成 400，
+  到不了我们的代码。curl 用 `-G --data-urlencode`；页面用 `encodeURIComponent`；写接口走 body 就不受影响。
 
 ## 前端 / Python
 
