@@ -13,6 +13,8 @@ rooms:
       kind: th
       did: "1095838227"
       props: { temperature: "temperature-6", humidity: "relative-humidity-6" }
+# 播报用的音箱：不在房间里，它是「念出来」这个出口
+tts: { did: "380188346" }
 ```
 
 ## 字段
@@ -24,6 +26,21 @@ rooms:
 | `prop` | 开关要写的属性名：`on`、`on-2`、`on-3` |
 | `kind` | `th`（温度 + 湿度，显示成 `24.5° 34%`）或 `smoke`（状态 + 电量） |
 | `props` | `th` 要 `temperature`/`humidity`；`smoke` 要 `status`/`battery` |
+| 顶层 `tts.did` | 播报音箱的 did。不写 = 没有播报能力 |
+
+## 播报怎么念话
+
+`POST /api/mijia/say {"text":"开会了"}` —— 文本当动作参数发给小米云端，语音合成在云端做，
+本地不生成音频。音箱只有一台，所以请求里不指定设备；换设备改顶层 `tts.did`。
+
+两个踩过的坑（写设备表时别再试错）：
+
+- 不能写 `text-content` 属性（spec 里它是只读，云会回「Property不可写」）；
+- 动作参数必须放在 `in` 里，放 `value` 会被回「Action参数个数不匹配」；
+- siid/aiid 不写进设备表：代码按 miot 动作名 `play-text` 查（l7a 是 siid5、x08c 是 siid3，
+  写死反而换设备就废）。
+
+只回「指令已下发」：云端没有播放回执，`code=0` 只代表接受。
 
 ## 注意
 

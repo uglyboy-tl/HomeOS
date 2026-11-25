@@ -20,6 +20,10 @@ class SwitchReq(BaseModel):
     on: bool
 
 
+class SayReq(BaseModel):
+    text: str
+
+
 def _call(fn, *args) -> dict:
     """统一的错误映射：未知开关 400，米家不可用 503，其它 500（细节只进日志，不回给客户端）。"""
     try:
@@ -42,6 +46,14 @@ def api_state(room: str | None = None):
 @router.post("/api/mijia/switch")
 def api_switch(req: SwitchReq):
     return _call(mijia.set_switch, req.id, req.on)
+
+
+@router.post("/api/mijia/say")
+def api_say(req: SayReq):
+    """让音箱念一句话（文本在小米云端合成）。"""
+    if not req.text.strip():
+        raise HTTPException(400, "播报文本是空的")
+    return _call(mijia.say, req.text)
 
 
 @router.get("/api/mijia/devices")

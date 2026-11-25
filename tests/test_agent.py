@@ -42,6 +42,59 @@ def test_turn_gives_up_on_empty_done(monkeypatch):
     assert "回复" in snap["error"]
 
 
+def test_speech_strips_markup():
+    assert agent.speech("**结论**：把灯关了。") == "结论：把灯关了。"
+    assert agent.speech("改好了：\n```css\n.x{}\n```\n刷新即可") == "改好了： 刷新即可"
+    assert agent.speech("看 [文档](https://x/y) 的 `play-text`") == "看 文档 的 play-text"
+
+
+def test_say_is_the_one_that_clips():
+    """截断只发生在 API 边界（mijia.say），speech() 只负责去掉标记。"""
+    from app.services import mijia
+
+    assert mijia.SAY_MAX > 0 and isinstance(mijia.SAY_MAX, int)
+
+
+async def _no_resync2(mode):
+    return None
+
+
+def test_done_turn_is_spoken_once(monkeypatch):
+    """一轮结束时念正文；随后再 take 同结果不该重复播报。"""
+    import asyncio
+
+    spoken = []
+
+    async def fake_speak(text):
+        spoken.append(agent.speech(text))
+
+    monkeypatch.setattr(agent, "_speak", fake_speak)
+
+    async def fake_call(method, path, body=None, timeout=30.0):
+        return {
+            "data": [
+                {
+                    "id": "a1",
+                    "type": "assistant",
+                    "time": {"created": 2, "completed": 3},
+                    "content": [{"type": "text", "text": "**好了**，灯已关"}],
+                },
+                {"id": "u1", "type": "user", "time": {"created": 1}, "text": "关灯"},
+            ]
+        }
+
+    agent._state["chat"] = agent._blank() | {"session_id": "s1", "user_msg_id": "u1"}
+
+    async def run():
+        monkeypatch.setattr(agent, "_call", fake_call)
+        await agent.resync("chat")
+        await agent.resync("chat")  # 同一段正文，第二次不该再念
+        await asyncio.sleep(0)  # 让 create_task 跑起来
+
+    asyncio.run(run())
+    assert spoken == ["好了，灯已关"]
+
+
 def test_modes_map_to_opencode_agents():
     assert agent.MODES == {"chat": "chat", "design": "pages", "device": "device"}
 

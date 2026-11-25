@@ -13,11 +13,12 @@
 import asyncio
 import json
 import logging
+import re
 import time
 
 import httpx
 
-from . import opencode
+from . import mijia, opencode
 
 log = logging.getLogger("homeos.agent")
 
@@ -51,6 +52,7 @@ def _blank(agent: str | None = None) -> dict:
         "dirty": False,  # 有事件来过，还没对账
         "synced_at": 0.0,
         "empty_since": 0.0,  # done 但正文还没落库的起点，见 turn()
+        "spoken": "",  # 已经念过的正文：同一段不重复播报
     }
 
 
@@ -230,6 +232,34 @@ async def resync(mode: str) -> None:
     st["state"] = "error" if summary["error"] else "done" if summary["done"] else "thinking"
     if st["state"] == "thinking":
         st["empty_since"] = 0.0
+    elif st["state"] == "done" and st["text"] and st["text"] != st["spoken"]:
+        st["spoken"] = st["text"]  # 先记再播：多个客户端同时 turn() 也只会念一次
+        task = asyncio.create_task(_speak(st["text"]))
+        _speaking.add(task)
+        task.add_done_callback(_speaking.discard)
+
+
+_MD = re.compile(r"```[\s\S]*?```|`([^`]*)`|\*\*?([^*]*)\*\*?|^#+\s*|\[([^\]]*)\]\([^)]*\)", re.M)
+
+
+def speech(text: str) -> str:
+    """把正文整理成能念的样子：去掉代码块、行内标记、链接地址，压平空白。"""
+    out = _MD.sub(lambda m: m.group(1) or m.group(3) or m.group(2) or " ", text or "")
+    return re.sub(r"\s+", " ", out).strip()
+
+
+_speaking: set[asyncio.Task] = set()  # 事件循环只持弱引用，不留住会被中途回收
+
+
+async def _speak(text: str) -> None:
+    said = speech(text)
+    if not said:
+        return
+    try:  # 播报是锦上添花：失败只记日志，别影响这一轮的结果
+        log.info("播报：%s", said[:24])
+        await asyncio.to_thread(mijia.say, said)
+    except Exception as e:  # noqa: BLE001 — 云接口 + 设备表，失败种类不可枚举
+        log.warning("播报失败：%s", e)
 
 
 async def turn(mode: str) -> dict:

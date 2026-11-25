@@ -1,6 +1,6 @@
-"""米家能力层：读状态、写开关。
+"""米家：设备表（读 config/mijia.yaml）+ 读状态、写开关、让播报音箱念话。
 
-设备表在 config/mijia.yaml（见 config/README.md），这里只有缓存与设备 I/O。
+设备表的格式见 config/README.md。分成两段：解析校验（写完就只读）与云 I/O（带缓存）。
 调用方都在线程池里（routes/mijia.py 的 sync def），别把这里改成 async。
 
 锁的边界：`_cache_lock` 只罩缓存字典与内存映射，不罩网络 I/O；同一台设备的云端
@@ -16,8 +16,11 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
+from pathlib import Path
 
-from .. import config, mijia_config
+import yaml
+
+from .. import config
 
 try:
     from mijiaAPI import mijiaAPI, mijiaDevice
@@ -52,6 +55,126 @@ class MijiaError(RuntimeError):
 
 class UnknownSwitch(LookupError):
     """请求里给的开关 id 不在设备表里。"""
+
+
+class UnknownRoom(LookupError):
+    """请求里的房间不在设备表里。"""
+
+
+# ---------------------------------------------------------------- 设备表
+# 结构是「房间 → 设备」两级，外加顶层 `tts`（播报认哪台音箱）。
+# 没有 kind 的是开关，kind 为 th/smoke 的是传感器。解析完就不再防御。
+
+KIND_PROPS = {"th": ("temperature", "humidity"), "smoke": ("status", "battery")}
+SEP = "/"  # 房间/设备 拼 id 用，所以名字里不能有它
+
+_table_cache: tuple[float, dict] | None = None
+
+
+class TableError(MijiaError, ValueError):
+    """设备表写错了。消息里带确切位置，照着改 YAML 就行。"""
+
+
+def _str(obj: dict, key: str, where: str) -> str:
+    value = obj.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise TableError(f"{where} 的 {key} 必须是非空字符串")
+    return value.strip()
+
+
+def _name(raw, where: str) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise TableError(f"{where} 必须是非空名字")
+    name = raw.strip()
+    if SEP in name:
+        raise TableError(f"{where} 不能含 {SEP!r}")
+    return name
+
+
+def _device(name: str, raw, where: str) -> dict:
+    """一台设备：有 kind 是传感器，没有是开关。"""
+    if not isinstance(raw, dict):
+        raise TableError(f"{where} 必须是对象")
+    did = _str(raw, "did", where)
+    if "kind" not in raw:
+        return {
+            "id": name,
+            "label": name,
+            "did": did,
+            "prop": _str(raw, "prop", where),
+        }
+    kind = _str(raw, "kind", where)
+    if kind not in KIND_PROPS:
+        raise TableError(f"{where} 的 kind 只能是 {'/'.join(KIND_PROPS)}")
+    props = raw.get("props")
+    if not isinstance(props, dict):
+        raise TableError(f"{where} 缺 props")
+    return {
+        "id": name,
+        "label": name,
+        "kind": kind,
+        "did": did,
+        "props": {key: _str(props, key, f"{where}.props") for key in KIND_PROPS[kind]},
+    }
+
+
+def _tts(doc) -> dict | None:
+    """播报音箱：只有 did，动作与参数是代码的事。不写就代表没有播报能力。"""
+    raw = doc.get("tts")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TableError('顶层 tts 必须是对象，如 tts: { did: "380188346" }')
+    return {"did": _str(raw, "did", "tts")}
+
+
+def _parse(doc) -> dict:
+    rooms_raw = doc.get("rooms") if isinstance(doc, dict) else None
+    if not isinstance(rooms_raw, dict) or not rooms_raw:
+        raise TableError("顶层要有 rooms，且至少一个房间")
+
+    rooms: list[dict] = []
+    switches: dict[str, dict] = {}
+    sensors: dict[str, dict] = {}
+    for room_label, devices in rooms_raw.items():
+        room_name = _name(room_label, "房间名")
+        if not isinstance(devices, dict) or not devices:
+            raise TableError(f"房间 {room_name} 下面要至少一台设备")
+        room = {"id": room_name, "label": room_name, "switches": [], "sensors": []}
+        for device_label, raw in devices.items():
+            device_name = _name(device_label, f"{room_name} 下的设备名")
+            where = f"{room_name}.{device_name}"
+            item = _device(device_name, raw, where)
+            full_id = f"{room_name}{SEP}{device_name}"
+            item["id"] = full_id
+            bucket = sensors if "kind" in item else switches
+            bucket[full_id] = item
+            room["sensors" if "kind" in item else "switches"].append(item)
+        rooms.append(room)
+    return {"rooms": rooms, "switches": switches, "sensors": sensors, "tts": _tts(doc)}
+
+
+def _load_table() -> dict:
+    """读设备表。按 mtime 缓存，改完下一次请求就是新的。
+
+    返回 {"rooms": [{id,label,switches:[...],sensors:[...]}],
+          "switches": {id: 开关}, "sensors": {id: 传感器}, "tts": {did} 或 None}。
+    """
+    global _table_cache
+    path = Path(config.MIJIA_CONFIG)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError as e:
+        raise TableError(f"读不到设备表 {path}：{e}") from e
+    if _table_cache and _table_cache[0] == mtime:
+        return _table_cache[1]
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        raise TableError(f"设备表 {path} 解析失败：{e}") from e
+    data = _parse(doc)
+    _table_cache = (mtime, data)
+    return data
 
 
 # ---------------------------------------------------------------- 缓存
@@ -112,13 +235,6 @@ def _cached(key: str, ttl: float, fetch: Callable[[], dict]) -> dict:
 
 
 # ---------------------------------------------------------------- 设备
-
-
-def _table() -> dict:
-    try:
-        return mijia_config.load()
-    except mijia_config.ConfigError as e:
-        raise MijiaError(f"设备表有问题：{e}") from e
 
 
 def _client():
@@ -211,7 +327,7 @@ def devices() -> dict:
 
     任何前端（网页、ESP32、别的脚本）都用这一份，怎么排版由它们自己决定。
     """
-    table = _table()
+    table = _load_table()
     rooms = [{"id": room["id"], "name": room["label"]} for room in table["rooms"]]
     items = []
     for room in table["rooms"]:
@@ -231,10 +347,6 @@ def devices() -> dict:
     return {"rooms": rooms, "devices": items}
 
 
-class UnknownRoom(LookupError):
-    """请求里的房间不在设备表里。"""
-
-
 def read_state(room: str | None = None) -> dict:
     """读状态：按设备 id 给原始值，不含任何显示格式。
 
@@ -244,7 +356,7 @@ def read_state(room: str | None = None) -> dict:
     同设备的并发用它的 `_device_lock` 串行（mijiaDevice 共用一条会话，不能交错）。
     """
     _client()  # 没登录就在这一行失败，别等到每个设备各失败一次
-    rooms = _table()["rooms"]
+    rooms = _load_table()["rooms"]
     if room is not None:
         rooms = [r for r in rooms if r["id"] == room]
         if not rooms:
@@ -273,9 +385,30 @@ def _read_one(fn: Callable[[dict], dict], item: dict) -> dict:
         return {"error": str(e)[:80]}
 
 
+SAY_ACTION = "play-text"  # miot 里"念一段话"的动作名，各家音箱一致
+SAY_MAX = 200  # 一次播报的文本上限（实测 280 字也接受，留余量）
+
+
+def say(text: str) -> dict:
+    """让播报音箱念一句话（设备表顶层 `tts`）：文本当动作参数，合成在小米云端做。
+
+    只回"已下发"：云端没有播放回执，`code` 只代表指令被接受。
+    """
+    tts = _load_table()["tts"]
+    if tts is None:
+        raise MijiaError("没配播报音箱（config/mijia.yaml 顶层的 tts）")
+    said = (text or "").strip()[:SAY_MAX]
+    _client()
+    did = tts["did"]
+    with _device_lock(did):
+        # 参数名必须是 `in`：动作走 /miotspec/action，放 `value` 会被回"参数个数不匹配"
+        _dev(did).run_action(SAY_ACTION, **{"in": [said]})
+    return {"text": said}
+
+
 def set_switch(sid: str, want: bool) -> dict:
     """开/关一个设备，并且**读回确认**——只看写接口的 ack 不算成功。"""
-    switch = _table()["switches"].get(sid)
+    switch = _load_table()["switches"].get(sid)
     if switch is None:
         raise UnknownSwitch(f"未知开关：{sid}")
     _client()

@@ -16,6 +16,8 @@
 #   - 台灯：没有 on，开关是 on-2
 #   - 温湿度：开关面板上是带后缀的 temperature-6 / relative-humidity-6，
 #     蓝牙温湿度计是裸的 temperature / relative-humidity
+#   - 播报音箱（顶层 tts）：`text-content` 属性在 spec 里是只读，写它会报「Property不可写」；
+#     要念必须调 play-text 动作并把文本放进 `in` 参数（`value` 会被拒）
 
 rooms:
   客厅:
@@ -49,3 +51,8 @@ rooms:
       kind: smoke
       did: "blt.3.1k9cu3ingcg00"
       props: { status: "status", battery: "battery-level" }
+
+# 播报（TTS）：念话认这一台，不是房间里的设备，所以不在上面并列。
+# 只填 did —— 念话用哪个动作、动作用什么参数是代码的事（按 miot 动作名 play-text 查）。
+# 想换设备只改这里；整段删掉则 /api/mijia/say 报「没配播报音箱」。
+tts: { did: "380188346" }

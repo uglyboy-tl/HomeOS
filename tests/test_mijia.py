@@ -1,13 +1,14 @@
-"""米家接口：只验证「数据形状 + 失败怎么报」。不连真云、不点真灯。
-
-设备表的解析与校验在 test_mijia_config.py。
-"""
+"""米家：设备表解析 + 接口（数据形状、失败怎么报）。不连真云、不点真灯。"""
 
 import json
+import os
+import textwrap
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app import config
 from app.main import app
 from app.services import mijia
 
@@ -35,6 +36,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(mijia, "devices", lambda: DEVICES)
     monkeypatch.setattr(mijia, "read_state", lambda room=None: VALUES)
     monkeypatch.setattr(mijia, "set_switch", lambda sid, on: {"id": sid, "on": on})
+    monkeypatch.setattr(mijia, "say", lambda text: {"text": text.strip()})
 
 
 def test_devices_is_pure_data(fake):
@@ -68,6 +70,25 @@ def test_switch_returns_confirmed_value(fake):
 
 def test_switch_rejects_bad_body(fake):
     assert TestClient(app).post("/api/mijia/switch", json={"id": "x"}).status_code == 422
+
+
+def test_say_passes_text_through(fake):
+    r = TestClient(app).post("/api/mijia/say", json={"text": " 开会了 "})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "text": "开会了"}
+
+
+def test_say_rejects_bad_body(fake):
+    assert TestClient(app).post("/api/mijia/say", json={}).status_code == 422
+
+
+def test_say_without_speaker_is_503(monkeypatch):
+    def boom(text):
+        raise mijia.MijiaError("没配播报音箱")
+
+    monkeypatch.setattr(mijia, "say", boom)
+    r = TestClient(app).post("/api/mijia/say", json={"text": "喂"})
+    assert r.status_code == 503 and "播报音箱" in r.json()["detail"]
 
 
 def test_unknown_switch_is_400(fake, monkeypatch):
@@ -158,7 +179,7 @@ def test_state_cached_per_device(tmp_path, monkeypatch):
         "switches": {},
         "sensors": {},
     }
-    monkeypatch.setattr("app.mijia_config.load", lambda: table)
+    monkeypatch.setattr(mijia, "_load_table", lambda: table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
 
     def read_ok(did, prop):
@@ -236,7 +257,7 @@ def test_read_state_filters_room_and_reads_in_parallel(tmp_path, monkeypatch):
         "switches": {},
         "sensors": {},
     }
-    monkeypatch.setattr("app.mijia_config.load", lambda: table)
+    monkeypatch.setattr(mijia, "_load_table", lambda: table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
     monkeypatch.setattr(mijia, "_read", lambda did, prop: True)
     monkeypatch.setattr(
@@ -263,7 +284,7 @@ def _one_switch_table():
 
 def test_set_switch_confirms_by_readback(monkeypatch):
     """写完要读回；读回等于目标值才算成功，并且只作废这一台的缓存。"""
-    monkeypatch.setattr("app.mijia_config.load", _one_switch_table)
+    monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
     monkeypatch.setattr(mijia.time, "sleep", lambda _: None)
 
@@ -289,7 +310,7 @@ def test_set_switch_confirms_by_readback(monkeypatch):
 
 def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
     """设备没按预期变化时不谎报成功。"""
-    monkeypatch.setattr("app.mijia_config.load", _one_switch_table)
+    monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
     monkeypatch.setattr(mijia.time, "sleep", lambda _: None)
 
@@ -305,7 +326,7 @@ def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
 
 
 def test_set_switch_rejects_unknown_id(monkeypatch):
-    monkeypatch.setattr("app.mijia_config.load", _one_switch_table)
+    monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
     with pytest.raises(mijia.UnknownSwitch):
         mijia.set_switch("没有这台", True)
 
@@ -370,3 +391,119 @@ def test_read_errors_are_not_cached(tmp_path, monkeypatch):
     out = mijia._cached("sensor:x", 900, boom)  # 有旧值时：返回旧值 + stale
     assert out["stale"] is True
     assert mijia._disk["sensor:x"]["ts"] == 0  # 落盘时间戳没被刷新（不算成功读取）
+
+
+# ---------------------------------------------------------------- 设备表
+
+GOOD = """
+rooms:
+  客厅:
+    吸顶灯: { did: "1", prop: "on-3" }
+    温湿度:
+      kind: th
+      did: "1"
+      props: { temperature: "temperature-6", humidity: "relative-humidity-6" }
+  次卧:
+    烟感:
+      kind: smoke
+      did: "blt.1"
+      props: { status: "status", battery: "battery-level" }
+"""
+
+
+@pytest.fixture
+def table(tmp_path, monkeypatch):
+    path = tmp_path / "mijia.yaml"
+    path.write_text(textwrap.dedent(GOOD), encoding="utf-8")
+    monkeypatch.setattr(config, "MIJIA_CONFIG", path)
+    mijia._table_cache = None
+    return path
+
+
+def test_two_levels_and_order(table):
+    data = mijia._load_table()
+    assert [r["label"] for r in data["rooms"]] == ["客厅", "次卧"]
+    room = data["rooms"][0]
+    assert [s["label"] for s in room["switches"]] == ["吸顶灯"]
+    assert [s["label"] for s in room["sensors"]] == ["温湿度"]
+    assert set(data["switches"]) == {"客厅/吸顶灯"}
+    assert set(data["sensors"]) == {"客厅/温湿度", "次卧/烟感"}
+
+
+def test_switch_needs_did_and_prop(table):
+    assert mijia._load_table()["switches"]["客厅/吸顶灯"] == {
+        "id": "客厅/吸顶灯",
+        "label": "吸顶灯",
+        "did": "1",
+        "prop": "on-3",
+    }
+
+
+def test_reload_when_file_changes(table):
+    assert [r["label"] for r in mijia._load_table()["rooms"]] == ["客厅", "次卧"]
+    table.write_text('rooms:\n  书房:\n    灯: { did: "9", prop: "on" }\n', encoding="utf-8")
+    later = time.time() + 2
+    os.utime(table, (later, later))  # mtime 只到秒
+    assert [r["label"] for r in mijia._load_table()["rooms"]] == ["书房"]
+
+
+def test_missing_prop_reports_position(table):
+    table.write_text('rooms:\n  客厅:\n    灯: { did: "1" }\n', encoding="utf-8")
+    with pytest.raises(mijia.TableError) as e:
+        mijia._load_table()
+    assert "客厅.灯" in str(e.value) and "prop" in str(e.value)
+
+
+def test_bad_kind_and_missing_props(table):
+    table.write_text(
+        'rooms:\n  客厅:\n    灯:\n      kind: lux\n      did: "1"\n      props: {}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(mijia.TableError) as e:
+        mijia._load_table()
+    assert "kind" in str(e.value)
+
+
+def test_slash_in_name_rejected(table):
+    table.write_text('rooms:\n  客/厅:\n    灯: { did: "1", prop: "on" }\n', encoding="utf-8")
+    with pytest.raises(mijia.TableError):
+        mijia._load_table()
+
+
+def test_empty_rooms_rejected(table):
+    table.write_text("rooms: {}\n", encoding="utf-8")
+    with pytest.raises(mijia.TableError):
+        mijia._load_table()
+
+
+def test_missing_file_is_table_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MIJIA_CONFIG", tmp_path / "nope.yaml")
+    mijia._table_cache = None
+    with pytest.raises(mijia.TableError) as e:
+        mijia._load_table()
+    assert "读不到设备表" in str(e.value)
+
+
+def test_repo_config_is_valid():
+    """仓库里那份真的设备表必须能过校验（改了 YAML 立刻能发现写错）。"""
+    mijia._table_cache = None
+    data = mijia._load_table()
+    assert data["rooms"], "至少要有一个房间"
+    assert all(s["prop"] for s in data["switches"].values())
+
+
+def test_tts_is_top_level_not_a_room_device(table):
+    assert mijia._load_table()["tts"] is None  # 没写就是没有播报能力
+    table.write_text(table.read_text("utf-8") + '\ntts: { did: "380" }\n', encoding="utf-8")
+    mijia._table_cache = None
+    data = mijia._load_table()
+    assert data["tts"] == {"did": "380"}
+    names = [one["id"] for room in data["rooms"] for one in room["switches"] + room["sensors"]]
+    assert "380" not in names  # 不混进房间设备里
+
+
+def test_tts_needs_did(table):
+    table.write_text(table.read_text("utf-8") + "\ntts: {}\n", encoding="utf-8")
+    mijia._table_cache = None
+    with pytest.raises(mijia.TableError, match="tts 的 did"):
+        mijia._load_table()
