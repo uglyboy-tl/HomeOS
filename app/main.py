@@ -6,10 +6,11 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 
 from . import config, runtime
 from .routes import agent, asr, health, mijia, oc, pages
+from .security import require_auth
 from .services import agent as agent_service
 from .services import mijia as mijia_service
 
@@ -49,10 +50,17 @@ def create_app() -> FastAPI:
     )
     # 顺序有意义：API 在前，兜底的静态路由在后
     agent.install_error_handlers(app)
+    if not config.TOKEN:
+        logging.getLogger("homeos").warning(
+            "未配置 HOMEOS_TOKEN：/oc 关闭，%s",
+            "接口放行（DEV）" if config.DEV else "接口需令牌（生产）",
+        )
+    # 所有 /api/* 统一挂认证（新增路由自动受保护），只有 /api/ready 单独挂在外面
+    api = APIRouter(dependencies=[Depends(require_auth)])
+    for r in (health.api_router, mijia.router, asr.router, agent.router):
+        api.include_router(r)
     app.include_router(health.router)
-    app.include_router(mijia.router)
-    app.include_router(asr.router)
-    app.include_router(agent.router)
+    app.include_router(api)
     app.include_router(oc.router)
     app.include_router(pages.router)
     return app

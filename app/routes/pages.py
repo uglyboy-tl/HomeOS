@@ -1,12 +1,10 @@
-"""页面路由：把静态 HTML 原样发出去。
+"""页面路由：静态 HTML 原样发出，无模板无注入。"""
 
-没有模板、没有注入：每个页面都是独立、完整的 HTML，自己能打开、能拷走。
-"""
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import config, scan
+from ..security import auth_cookie
 
 router = APIRouter()
 
@@ -29,23 +27,30 @@ def _file(rel: str, headers: dict | None = None):
     return FileResponse(full, headers=headers or ASSET_CACHE)
 
 
+def _page(rel: str, request: Request):
+    head = dict(NO_STORE)
+    if config.TOKEN:
+        head["Set-Cookie"] = auth_cookie(request)
+    return _file(rel, head)
+
+
 @router.get("/")
-def home():
-    return _file(FIXED["home"], NO_STORE)
+def home(request: Request):
+    return _page(FIXED["home"], request)
 
 
 @router.get("/{name}")
-def fixed_page(name: str):
+def fixed_page(name: str, request: Request):
     if name == "home" or name not in FIXED:
         raise HTTPException(status_code=404)
-    return _file(FIXED[name], NO_STORE)
+    return _page(FIXED[name], request)
 
 
 @router.get("/p/{slug}")
-def page(slug: str):
+def page(slug: str, request: Request):
     if not scan.SLUG.match(slug):
         raise HTTPException(status_code=404)
-    return _file(f"pages/{slug}/index.html", NO_STORE)
+    return _page(f"pages/{slug}/index.html", request)
 
 
 @router.get("/pages/{slug}/assets/{name:path}")

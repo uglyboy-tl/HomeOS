@@ -36,6 +36,8 @@ class FakeClient:
         pass
 
     def build_request(self, *args, **kwargs):
+        sent_headers.clear()
+        sent_headers.update(kwargs.get("headers") or {})
         return object()
 
     async def send(self, req, stream=False):
@@ -50,6 +52,7 @@ class FakeClient:
 
 
 closed: list[str] = []
+sent_headers: dict[str, str] = {}
 
 
 @pytest.fixture
@@ -79,6 +82,13 @@ def test_upstream_down_maps_to_502(client):
     assert r.status_code == 502
     assert "没启动" in r.json()["error"]
     assert "client" in closed
+
+
+def test_only_whitelisted_headers_go_upstream(client):
+    """客户端带来的任何头（含 /oc 的令牌、Cookie）都不转发。"""
+    FakeClient.mode = "ok"
+    client.get("/t", headers={"X-HomeOS-Token": "s3cret", "Cookie": "a=b"})
+    assert sent_headers == {"Accept-Encoding": "identity"}
 
 
 def test_streams_chunks_and_closes_everything(client):
