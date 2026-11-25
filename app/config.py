@@ -16,7 +16,7 @@ PAGES_DIR = WEB_ROOT / "pages"
 # 本机没有可写 /data 时落仓库的 .devdata。docker/entrypoint.sh 用同一条判据。
 DATA_DIR = Path("/data") if os.access("/data", os.W_OK) else APP_DIR.parent / ".devdata"
 
-# 米家设备表（房间 → 设备）；容器里由 compose 把 ./config 只读挂进来
+# 米家设备表（房间 → 设备）；默认用镜像里那份，想覆盖就在 compose 里挂 ./config:ro
 MIJIA_CONFIG = Path(
     os.environ.get("HOMEOS_MIJIA_CONFIG") or APP_DIR.parent / "config" / "mijia.yaml"
 ).resolve()
@@ -50,6 +50,18 @@ ASR_HOST = (
 ASR_KEY = os.environ.get("HOMEOS_ASR_KEY", "")
 ASR_LANG = os.environ.get("HOMEOS_ASR_LANG", "zh-CN")  # Azure 只认完整 locale，裸 zh 会 400
 ASR_TIMEOUT = float(os.environ.get("HOMEOS_ASR_TIMEOUT", "10"))
+
+# Gotify：容器里走服务名（同 traefik 网络），不走域名/公网
+GOTIFY_URL = os.environ.get("HOMEOS_GOTIFY_URL", "http://gotify")
+GOTIFY_TOKEN = os.environ.get("HOMEOS_GOTIFY_TOKEN", "").strip()
+GOTIFY_TIMEOUT = 10.0
+
+# MPD：局域网里的音乐服务（文本协议，6600）
+MPD_HOST = os.environ.get("HOMEOS_MPD_HOST", "192.168.0.100")
+MPD_PORT = int(os.environ.get("HOMEOS_MPD_PORT", "6600"))
+MPD_CONNECT_TIMEOUT = 3.0
+MPD_TIMEOUT = 10.0
+MPD_SYNC_TIMEOUT = 60.0  # update 与重建列表共用一个预算
 
 # 本地开发：非 DEV 才挂 /_docs、才信任"没有反向代理"
 DEV = os.environ.get("HOMEOS_DEV") == "1"

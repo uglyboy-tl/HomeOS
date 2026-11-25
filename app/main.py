@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Depends, FastAPI
 
 from . import config, runtime
-from .routes import agent, asr, health, mijia, oc, pages
+from .routes import agent, asr, health, mijia, mpd, notify, oc, pages
 from .security import require_auth
 from .services import agent as agent_service
 from .services import mijia as mijia_service
@@ -42,6 +42,8 @@ async def lifespan(_app: FastAPI):
 
 def create_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # httpx 的 INFO 会把完整 URL（含 query）写进 docker 日志，凭据不能出现在那里
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     app = FastAPI(
         title="homeos",
         docs_url="/_docs" if config.DEV else None,
@@ -57,7 +59,14 @@ def create_app() -> FastAPI:
         )
     # 所有 /api/* 统一挂认证（新增路由自动受保护），只有 /api/ready 单独挂在外面
     api = APIRouter(dependencies=[Depends(require_auth)])
-    for r in (health.api_router, mijia.router, asr.router, agent.router):
+    for r in (
+        health.api_router,
+        mijia.router,
+        mpd.router,
+        notify.router,
+        asr.router,
+        agent.router,
+    ):
         api.include_router(r)
     app.include_router(health.router)
     app.include_router(api)
