@@ -19,7 +19,8 @@ ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH" \
-    TMPDIR=/tmp
+    TMPDIR=/tmp \
+    TZ=Asia/Shanghai
 
 # git：opencode 的快照/撤销靠它。ripgrep：agent 搜文件。tini：PID 1。
 # bash：entrypoint 是 bash 脚本。tzdata：容器里 TZ=Asia/Shanghai 才有意义。
@@ -56,8 +57,8 @@ RUN pip install --no-cache-dir uv \
 # 代码与前端。web/pages 是卷，镜像里只建空目录（.dockerignore 排掉了内容）。
 COPY app ./app
 COPY web ./web
-# 设备表：git 里有一份、镜像也带一份，不挂 config 卷时米家页能直接用；
-# compose 的 :ro 挂载会覆盖成机器上那份，改表不用重建镜像。
+# 设备表：镜像里带一份，不挂 config 卷时米家页能直接用；
+# 想用机器上那份就在 compose 里放开 `./config:/app/config:ro`（改表不用重建镜像）。
 COPY config ./config
 COPY opencode ./opencode
 

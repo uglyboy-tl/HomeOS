@@ -14,23 +14,16 @@ services:
       - traefik.docker.network=traefik
     networks:
       - traefik
-    environment:
-      # 模型/搜索 key：栈目录里的 .env 提供，compose 自动加载并在这里引用。
-      # 不挂宿主机 auth.json——opencode 的凭据只走环境变量（见 opencode/opencode.jsonc）
-      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
-      EXA_API_KEY: ${EXA_API_KEY:-}
-      # 语音识别（Azure 实时 WS）：不填则 /api/asr/stream 连上就报错
-      HOMEOS_ASR_HOST: ${HOMEOS_ASR_HOST:-}
-      HOMEOS_ASR_KEY: ${HOMEOS_ASR_KEY:-}
-      HOMEOS_ASR_LANG: ${HOMEOS_ASR_LANG:-zh-CN}
-      # /oc 的令牌：不填 = 关闭 /oc（它等于 shell 权限，别裸奔）
-      HOMEOS_TOKEN: ${HOMEOS_TOKEN:-}
-      TZ: Asia/Shanghai
+    # .env 里的变量全部原样进容器（compose 的 .env 本来只用于插值，不会自动注入，
+    # 所以这里显式读取）；默认值统一写在 app/config.py，不在 compose 里重复一遍。
+    env_file:
+      - .env
     volumes:
       # 功能页：agent 唯一能写的地方，备份它就是备份全部用户内容
       - ./web/pages:/app/web/pages
-      # 设备表：改完重启容器即可
-      - ./config:/app/config:ro
+      # 设备表（config/mijia.yaml）默认用镜像里的那份。想自己改设备表就把下一行放开，
+      # 并在栈目录里放一份 config/ 覆盖镜像：
+      #   - ./config:/app/config:ro
       # 米家登录态复用宿主机（库写死 ~/.config/mijia-api，不认 XDG）
       - ${XDG_CONFIG_HOME:-${HOME}/.config}/mijia-api:/data/.config/mijia-api
     # 运行时状态（opencode 配置副本/session、米家缓存）不持久化：重启即重建

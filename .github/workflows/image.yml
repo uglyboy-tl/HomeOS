@@ -1,12 +1,11 @@
 name: image
 
-# main / 版本 tag 出镜像；PR 只跑测试，不推包。
+# 镜像与 Release 只在版本 tag 上出（v0.2.0 这种）；main 与 PR 只跑测试。
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,12 +29,12 @@ jobs:
 
   image:
     needs: test
-    # PR 上不构建：arm64 要跑 QEMU，一次十几分钟，不值得每 PR 都付；PR 只跑测试。
-    if: github.event_name != 'pull_request'
+    # 只有版本 tag 才构建：一次 arm64 走 QEMU 十几分钟，main 上每次都推包不值。
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # 只有这个作业需要推包，别把 write 权限给跑 PR 代码的 test。
+    # contents: write 用来建 Release；packages: write 用来推镜像。
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -53,9 +52,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha,format=short
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            # compose.yaml 里钉的是 :latest，所以 release 除了版本号还要推 latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -66,3 +65,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Release 与镜像同一次构建：有 Release 就说明镜像已推好。--latest 让 newest tag 成为 latest。
+      # tag 一律用 vX.Y.Z：非三段（如 v1）匹配不上 semver，只会推 latest 覆盖稳定版
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes --latest --verify-tag && exit 0
+          echo "release 已存在，改成标记为 latest" >&2
+          gh release edit "$GITHUB_REF_NAME" --latest

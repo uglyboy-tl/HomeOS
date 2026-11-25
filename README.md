@@ -23,7 +23,7 @@
 | `/p/<slug>` | agent 写的功能页（`web/pages/<slug>/`），一个目录一页 |
 
 接口分三类（详见 `docs/ARCHITECTURE.md` §2、§6）：**通用能力**（`/api/mijia/*`，局域网内其他应用
-可以直接调，只加不改）、**会话型**（`/api/agent/*`、`/api/asr/stream`，只给自家页面）、
+可以直接调，只加不改）、**会话型**（`/api/agent/{turn,stream,say,…}`、`/api/asr/stream`，只给自家页面）、
 **页面私有**（静态页面与 `/api/pages`）。`/oc/*` 是 opencode 反代，**必须带 `X-HomeOS-Token`**。
 
 只有一种皮肤（墨水屏）：纯黑白、零动画、rem 缩放，`web/assets/tokens.css` 是唯一的样式基线。
@@ -58,20 +58,16 @@ NAS 上统一放在 `Docker/` 目录下（群晖 `/volume1/Docker/HomeOS`、威�
 下面命令里的路径都按这个来。调试阶段直接整份传过去、在 NAS 上本地构建：
 
 ```bash
-# 本机 → NAS（不传虚拟环境、.git、缓存；data/ 与 NAS 本地状态不覆盖）
-rsync -av \
-  --exclude .venv --exclude .git --exclude .devdata --exclude .playwright-cli \
-  --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache \
-  ./ nas:Docker/HomeOS/
-
-# NAS 上
-cd Docker/HomeOS
-mkdir -p data ~/.config/mijia-api && cp .env.example .env   # 没有必填项，只有模型/搜索 key 要填
-uv run python -m mijiaAPI login             # 首次：扫码，登录态落在 ~/.config/mijia-api（没装 uv 就用 pip3 install --user mijiaAPI 再 python3 -m mijiaAPI login）
-docker compose up -d --build
+# NAS 上：整个部署目录只需要这些东西（其余都是镜像里的）
+#   compose.yaml  .env  web/pages/         ← 生产（卷是 ./web/pages，compose 里写死了）
+#   + app/ web/ + 自己写的 compose.dev.yaml ← 调试（改代码不用重建镜像；该文件不进仓库）
+cp .env.example .env          # 必须有：compose 用 env_file 读它，缺了起不来
+#   填 HOMEOS_TOKEN 与模型/搜索 key；其余项留空就用 app/config.py 里的默认值
+docker compose pull && docker compose up -d
 ```
 
-改前端（`web/`）同步后刷新即可；改 `app/` 或 `docker/` 要 `docker compose up -d --build`。
+改前端（`web/`）同步后刷新即可；改 `app/` 走调试形态（`-f compose.yaml -f 自己写的 compose.dev.yaml`），
+改 `docker/` 或依赖则重建镜像（CI 出图，见 `.github/workflows/image.yml`）。
 镜像只支持 arm64：NAS 是 x86 的话先 `docker run --privileged --rm tonistiigi/binfmt --install arm64`，
 之后构建走模拟，会慢很多。
 
@@ -79,7 +75,7 @@ docker compose up -d --build
 
 | 要什么 | 放哪 | 怎么进容器 |
 |---|---|---|
-| 设备表 `mijia.yaml` | 仓库里的 `config/` | compose 已挂 `./config:/app/config:ro`；镜像里也带一份当默认 |
+| 设备表 `mijia.yaml` | 镜像里的那份（仓库 `config/`） | 默认不挂卷；想改设备表就把 `compose.yaml` 里 `./config` 那行注释放开并放一份 `config/`（见 `config/README.md`） |
 | 登录态（`auth.json` + 设备 json） | 宿主机 `$XDG_CONFIG_HOME/mijia-api/`（没设时是 `~/.config/mijia-api/`） | compose 把这个目录挂到 `/data/.config/mijia-api`（rw，库要刷新 token） |
 
 登录态不拷贝：哪台机器跑容器就在哪台登录一次，容器里读的就那一份。在 NAS 上重新扫码后
