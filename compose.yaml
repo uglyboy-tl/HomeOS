@@ -15,7 +15,6 @@ services:
     networks:
       - traefik
     environment:
-      HOMEOS_DATA_DIR: /data
       # 模型/搜索 key：栈目录里的 .env 提供，compose 自动加载并在这里引用。
       # 不挂宿主机 auth.json——opencode 的凭据只走环境变量（见 opencode/opencode.jsonc）
       OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
@@ -24,6 +23,8 @@ services:
       HOMEOS_ASR_HOST: ${HOMEOS_ASR_HOST:-}
       HOMEOS_ASR_KEY: ${HOMEOS_ASR_KEY:-}
       HOMEOS_ASR_LANG: ${HOMEOS_ASR_LANG:-zh-CN}
+      # /oc 的令牌：不填 = 关闭 /oc（它等于 shell 权限，别裸奔）
+      HOMEOS_TOKEN: ${HOMEOS_TOKEN:-}
       TZ: Asia/Shanghai
     volumes:
       # 功能页：agent 唯一能写的地方，备份它就是备份全部用户内容

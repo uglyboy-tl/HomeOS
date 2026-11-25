@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-# HomeOS 的唯一启动入口：容器与本机开发共用一份，不再有第二个脚本。
-#
-#   容器里（无参数）：前台起两个进程，任一退出就整体退出，交给 restart policy
-#   /app/docker/entrypoint.sh
-#
-#   本机开发（带子命令）：后台起、带 pid 文件与日志，可单独重启某一块
-#   docker/entrypoint.sh up|down|restart [web|agent|all]|status|log
-#
-# 模式判定：无参数 = 容器前台；带子命令 = 本机托管。要强制可设 HOMEOS_MODE=container|dev。
+# HomeOS 的唯一启动入口：无参数 = 容器前台起两个进程；带子命令 = 本机后台托管。
+#   ./docker/entrypoint.sh up|down|restart [web|agent|all]|status|log
+#   强制切模式：HOMEOS_MODE=container|dev
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_PORT=8080
 OC_PORT=14100
 LOG_DIR="${HOMEOS_LOG_DIR:-/tmp/homeos-dev}"
-
-# ---------- 模式与环境 ----------
+DATA_DIR="$ROOT/.devdata"   # 与 app/config.py 同一条判据：/data 可写就用它
+[ -w /data ] && DATA_DIR=/data
 
 mode() {
   if [ -n "${HOMEOS_MODE:-}" ]; then echo "$HOMEOS_MODE"; return; fi
@@ -25,7 +19,7 @@ mode() {
 # opencode serve 与 web 之间的口令：没人需要手输，所以自动生成，落在卷里（重启不变）。
 # 两边进程都从这个环境变量读，所以由 prepare 统一 export。
 ensure_opencode_password() {
-  local file="$HOMEOS_DATA_DIR/auth/opencode"
+  local file="$DATA_DIR/auth/opencode"
   if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
     mkdir -p "$(dirname "$file")"
     if [ ! -s "$file" ]; then
@@ -50,17 +44,19 @@ prepare() {
   # 显式设了 HOMEOS_DEV 就以它为准：NAS 调试栈靠这个在容器里开热重载
   export HOMEOS_DEV="${HOMEOS_DEV:-$([ "$m" = dev ] && echo 1 || echo 0)}"
   if [ "$m" = container ]; then
-    export HOMEOS_DATA_DIR="${HOMEOS_DATA_DIR:-/data}"
+    if [ ! -w "$DATA_DIR" ]; then
+      echo "容器里 /data 不可写：检查 compose 的 tmpfs 或 volumes" >&2
+      exit 1
+    fi
     export HOME=/data                       # 米家 token 落 /data/.config/mijia-api/auth.json
     # opencode 会往配置根里写 service.json，镜像根是只读的，所以整份配置复制到卷里再指过去。
     # 代价：改了 opencode/ 下的配置要重建镜像（每次启动都覆盖）。
-    export XDG_CONFIG_HOME="$HOMEOS_DATA_DIR/config"
+    export XDG_CONFIG_HOME="$DATA_DIR/config"
     mkdir -p "$XDG_CONFIG_HOME"
     cp -r "$ROOT/opencode" "$XDG_CONFIG_HOME/"
     export HOMEOS_WARM_MIJIA="${HOMEOS_WARM_MIJIA:-1}"   # 启动后预热米家登录与设备列表
     BIND_HOST=0.0.0.0
   else
-    export HOMEOS_DATA_DIR="${HOMEOS_DATA_DIR:-$ROOT/.devdata}"
     export HOMEOS_WARM_MIJIA="${HOMEOS_WARM_MIJIA:-1}"
     export XDG_CONFIG_HOME="$ROOT"          # 本机直接用仓库里的 opencode/，改完即生效
     BIND_HOST=127.0.0.1
@@ -71,8 +67,8 @@ prepare() {
   else
     RELOAD=""
   fi
-  export XDG_DATA_HOME="$HOMEOS_DATA_DIR/opencode"   # session 与 snapshot
-  export XDG_CACHE_HOME="$HOMEOS_DATA_DIR/cache"
+  export XDG_DATA_HOME="$DATA_DIR/opencode"   # session 与 snapshot
+  export XDG_CACHE_HOME="$DATA_DIR/cache"
   # 插件是构建时预装好的（镜像里的 /app/plugin-cache），运行时根目录只读、也不联网，
   # 所以每次启动复制进可写缓存；没有就跳过（旧镜像或本机模式）。
   if [ -d /app/plugin-cache ]; then
@@ -84,7 +80,7 @@ prepare() {
   if [ -x "$ROOT/.venv/bin/uvicorn" ]; then
     export PATH="$ROOT/.venv/bin:$PATH"
   fi
-  mkdir -p "$HOMEOS_DATA_DIR/opencode" "$HOMEOS_DATA_DIR/cache"
+  mkdir -p "$DATA_DIR/opencode" "$DATA_DIR/cache"
   ensure_opencode_password
 
   if [ "$m" = dev ]; then
@@ -104,8 +100,6 @@ oc_bin() {
   echo "找不到 opencode：装一份，或设 HOMEOS_OPENCODE_BIN=/path/to/opencode" >&2
   return 1
 }
-
-# ---------- 三个进程 ----------
 
 cmd_web() {
   # RELOAD 是空或 --reload ...，故意不加引号
@@ -136,8 +130,6 @@ unit_field() {
   return 1
 }
 
-# ---------- 容器模式：前台 ----------
-
 run_foreground() {
   prepare container
   local pids=()
@@ -153,9 +145,6 @@ run_foreground() {
   exit 1
 }
 
-# ---------- 本机模式：后台托管 ----------
-
-# 起完等它真的应答，不然紧接着的 status / 请求会打到还没监听的端口上
 wait_up() {
   local port="$1" path="${2:-/}"
   for _ in $(seq 1 30); do
@@ -235,7 +224,7 @@ restart() {
 
 status() {
   local pw code
-  pw="$(cat "$HOMEOS_DATA_DIR/auth/opencode" 2>/dev/null || true)"
+  pw="$(cat "$DATA_DIR/auth/opencode" 2>/dev/null || true)"
   code=$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$WEB_PORT/" || true)
   echo "web:$code        http://127.0.0.1:$WEB_PORT/"
   code=$(curl -s -o /dev/null -m 2 -u "opencode:$pw" -w '%{http_code}' "http://127.0.0.1:$OC_PORT/api/info" || true)
