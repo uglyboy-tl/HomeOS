@@ -2,7 +2,7 @@
 # 用法：改下面两个路径后 `docker compose up -d`；要自己构建就把 image: 换成 build:。
 services:
   homeos:
-    image: ghcr.io/uglyboy-tl/homeos:latest
+    image: ghcr.nju.edu.cn/uglyboy-tl/homeos:latest   # 国内要镜像前缀，见 NAS 的 AGENTS.md
     container_name: homeos
     restart: unless-stopped
     # 不发布宿主端口：走 Traefik 反代（域名 → 容器 8080），HTTPS 也由 Traefik 终止，
