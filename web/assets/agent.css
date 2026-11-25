@@ -53,29 +53,6 @@
   background: var(--fg);
   color: var(--bg);
 }
-/* 「新对话」贴在输入框上方、右对齐：宽度和「发送」一样，右边缘对齐，
-   视觉上跟输入条是同一列，又不跟主操作抢位置 */
-.agent-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: calc(var(--gap) / 2) var(--gap) 0;
-  flex: 0 0 auto;
-}
-.agent-actions .agent-new {
-  min-width: 9rem;
-  min-height: 4.4rem;
-  padding: 0 1.2rem;
-  border: 0.1rem solid var(--line);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 1.7rem;
-}
-.agent-actions .agent-new:active {
-  background: var(--fg);
-  color: var(--bg);
-}
-
 /* 对话区：唯一允许滚动的地方（聊天内容会超过一屏） */
 .agent-log {
   flex: 1 1 0; /* 基准 0：内容再多也不会把这一块撑高 */
@@ -96,6 +73,8 @@
 }
 
 /* 输入条：钉在底部，按钮和输入框同高 */
+/* 输入条：新建 / 输入框（麦克风在里面）/ 发送。回车只换行，发送只认按钮。
+   输入框默认一行高，内容多了自己长（JS 算高度，CSS 只封顶）。 */
 .agent-say {
   display: flex;
   gap: calc(var(--gap) / 2);
@@ -103,30 +82,89 @@
   padding-bottom: max(var(--gap), env(safe-area-inset-bottom, 0px));
   border-top: 0.2rem solid var(--line);
   flex: 0 0 auto;
+  align-items: flex-end; /* 输入框长高时两侧按钮仍贴底 */
 }
+
+.agent-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0; /* 少了它，textarea 的固有宽度会把整行顶出屏幕 */
+  display: flex;
+  align-items: flex-end; /* 麦克风始终贴在右下角 */
+  border: 0.2rem solid var(--line); /* 边框在容器上：麦克风是子元素，不会压掉边 */
+  background: var(--bg);
+}
+
 .agent-say textarea {
   flex: 1 1 auto;
-  min-height: 6rem;
-  padding: 0.8rem var(--gap);
-  border: 0.2rem solid var(--line);
+  width: 100%; /* 跟随容器，不跟随 cols 属性 */
+  min-width: 0;
+  min-height: 4.6rem; /* 与图标按钮同高；外框由 .agent-field 画 */
+  max-height: 14rem; /* 约五行，再多自己滚 */
+  padding: 0.9rem 0 0.9rem var(--gap);
+  border: 0;
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 1.8rem;
-  line-height: 1.4;
+  line-height: 1.35;
   resize: none;
+  overflow-y: auto;
 }
-.agent-say .send {
+
+/* 焦点框是盖在整块上的一层，不是 outline：麦克风按钮在输入框内部、白底压在上面，
+   用 outline 画在 textarea 或容器上都可能被它盖掉右下角那一截。 */
+.agent-field:focus-within::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 0.3rem solid var(--fg);
+  pointer-events: none;
+}
+
+.agent-field textarea:focus-visible,
+.agent-mic:focus-visible {
+  outline: none; /* 整块已经有框了，别叠第二层 */
+}
+
+/* 麦克风：输入框里的最后一个子元素，靠底对齐；不压边框、不占额外一行 */
+.agent-mic {
   flex: 0 0 auto;
-  min-width: 9rem;
+  width: 4.6rem;
+  height: 4.6rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+}
+
+/* 录音中：整块反色，再点一次结束 */
+.agent-mic[aria-pressed="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.agent-say .agent-icon {
+  flex: 0 0 auto;
+  min-width: 5rem;
+  min-height: 5rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: 0.2rem solid var(--line);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 2rem;
-  font-weight: 700;
 }
-.agent-say .send:active {
+
+.agent-say .icon {
+  width: 2.2rem;
+  height: 2.2rem; /* 麦克风与两侧图标同尺寸 */
+}
+
+.agent-say .agent-icon:active {
   background: var(--fg);
   color: var(--bg);
 }

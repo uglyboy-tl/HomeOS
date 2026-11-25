@@ -10,7 +10,7 @@
   document.documentElement.style.setProperty('--vh-px', window.innerHeight + 'px');
 </script>
 <link rel="stylesheet" href="/assets/tokens.css">
-<link rel="stylesheet" href="/assets/agent.css">
+<link rel="stylesheet" href="/assets/agent.css?v=17">
 </head>
 <body>
 <main class="agent">
@@ -27,16 +27,28 @@
     <p class="agent-empty">聊天模式：问什么答什么，不改页面。</p>
   </div>
 
-  <div class="agent-actions">
-    <button type="button" class="agent-new">新对话</button>
-  </div>
-
   <form class="agent-say" autocomplete="off">
-    <textarea id="say" name="text" rows="2" placeholder="说点什么…"
-              enterkeyhint="send" aria-label="输入"></textarea>
-    <button type="submit" class="send">发送</button>
+    <button type="button" class="agent-icon agent-new" aria-label="新对话">
+      <!-- 内联图形：设备会缓存 icons.svg，新加的 symbol 拿不到 -->
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg>
+    </button>
+    <div class="agent-field">
+      <textarea id="say" name="text" rows="1" placeholder="说点什么…"
+                enterkeyhint="enter" aria-label="输入"></textarea>
+      <button type="button" class="agent-mic" aria-label="语音输入（点一次开始，再点结束）"
+              aria-pressed="false">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3"/>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/>
+        </svg>
+      </button>
+    </div>
+    <button type="submit" class="agent-icon agent-send" aria-label="发送">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+    </button>
   </form>
 </main>
-<script src="/assets/agent.js" defer></script>
+<!-- 改 agent.js 时把 v 加一：EinkBro 对子资源缓存很顽固，不换 URL 会跑旧代码 -->
+<script src="/assets/agent.js?v=17" defer></script>
 </body>
 </html>

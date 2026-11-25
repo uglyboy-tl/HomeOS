@@ -13,9 +13,10 @@
   const log = document.querySelector('.agent-log');
   const form = document.querySelector('.agent-say');
   const say = form && form.querySelector('textarea');
-  const send = form && form.querySelector('.send');
   const fresh = document.querySelector('.agent-new');
-  if (!tabs || !log || !form || !say || !send) return;
+  const mic = document.querySelector('.agent-mic');
+  const send = document.querySelector('.agent-send');
+  if (!tabs || !log || !form || !say || !fresh || !mic || !send) return;
 
   const HINT = {
     chat: '聊天模式：问什么答什么，不改页面。',
@@ -74,6 +75,8 @@
     DOM.user = node('p', 'agent-say-line');
     DOM.reply = node('p', 'agent-reply');
     DOM.note = node('p', 'agent-note');
+    // 「正在工作…」这种过渡状态不该被读屏播报（对局外人只是噪音）
+    DOM.note.setAttribute('aria-live', 'off');
     log.append(DOM.user, DOM.reply, DOM.note);
   }
 
@@ -85,7 +88,8 @@
 
   function noteOf(turn) {
     if (turn.state === 'error') return turn.error || '助手出错了';
-    if (turn.state === 'thinking') return WORKING;
+    // 已经有正文就不再挂「正在工作」：否则字都滚出来了，那行还赖在下面
+    if (turn.state === 'thinking' && !turn.text) return WORKING;
     return '';
   }
 
@@ -132,7 +136,10 @@
 
   function setBusy(on) {
     busy = on;
+    say.disabled = on;
+    mic.disabled = on;
     send.disabled = on;
+    fresh.disabled = on;
   }
 
   /* 跟着这一轮走到结束：优先 SSE，EventSource 不可用或断线就退回轮询。
@@ -176,7 +183,11 @@
         es.close();
         if (settled) return;
         settled = true;
-        poll(token).then(resolve);
+        // 轮询也会失败；失败也要 resolve，不然这一轮永远结束不了
+        poll(token).then(resolve, (err) => {
+          fail('读不到对话：' + err.message);
+          resolve();
+        });
       };
     });
   }
@@ -227,9 +238,10 @@
     try {
       const turn = await api('/api/agent/turn?mode=' + encodeURIComponent(mode));
       if (token !== epoch) return;
+      // 服务器说什么就存什么：idle 也要覆盖缓存，否则下次进来又先把旧内容画一遍再擦掉
+      cache(turn);
       if (!turn.question && turn.state === 'idle') return hint();
       show(turn);
-      cache(turn);
       if (turn.state !== 'thinking') return;
       setBusy(true);
       await follow(token);
@@ -240,6 +252,21 @@
     }
   }
 
+  /* 选中态：ARIA 要的是 aria-current="true"，不是空属性值（toggleAttribute 设的是 ""，
+     CSS 的 [aria-current="true"] 就匹配不上，选中项不高亮） */
+  function markTab() {
+    for (const b of tabs.querySelectorAll('button[data-mode]')) {
+      if (b.dataset.mode === mode) b.setAttribute('aria-current', 'true');
+      else b.removeAttribute('aria-current');
+    }
+  }
+
+  /* 输入框跟着内容长高：CSS 封顶 14rem，超了自己滚 */
+  function grow() {
+    say.style.height = 'auto';
+    say.style.height = say.scrollHeight + 'px';
+  }
+
   /* ---- 交互 ---- */
 
   tabs.addEventListener('click', (e) => {
@@ -247,28 +274,224 @@
     if (!btn || btn.dataset.mode === mode) return;
     mode = btn.dataset.mode;
     write(MODE_KEY, mode);
-    for (const b of tabs.querySelectorAll('button[data-mode]')) {
-      b.toggleAttribute('aria-current', b === btn);
-    }
+    markTab();
     invalidate(); // 旧轮询/旧 SSE 作废
     setBusy(false);
     reset();
     load();
   });
 
-  if (fresh) {
-    fresh.addEventListener('click', async () => {
-      invalidate();
-      setBusy(false);
-      try {
-        cache(await api('/api/agent/new', { mode }));
-        hint();
-      } catch (err) {
-        hint();
-        fail('开新对话失败：' + err.message);
-      }
-    });
+  /* ---- 语音输入：点一次开始录、再点一次结束 ----
+     边说边出字（后端把 Azure 的中间结果推回来），结束时把最终文本填进输入框，
+     不自动发送。麦克风要 secure context：https 或 localhost，否则 getUserMedia 直接拒。 */
+
+  const MIC_ERROR = '拿不到麦克风（要 https 或 localhost，并允许麦克风权限）';
+
+  let rec = null; // { ws, ctx, stream, node, buf, bytes, endTimer }
+  let baseText = ''; // 开始录音时输入框里的内容，识别结果接在它后面
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function downsample(input, from) {
+    if (from === 16000) return input;
+    const ratio = from / 16000;
+    const out = new Float32Array(Math.floor(input.length / ratio));
+    for (let i = 0; i < out.length; i += 1) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+      let sum = 0;
+      for (let j = start; j < end; j += 1) sum += input[j];
+      out[i] = sum / Math.max(1, end - start);
+    }
+    return out;
   }
+
+  function toPcm16(samples) {
+    const out = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    return out;
+  }
+
+  async function startVoice() {
+    baseText = say.value;
+    const ws = new WebSocket(
+      (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/asr/stream',
+    );
+    ws.binaryType = 'arraybuffer';
+    rec = { ws, ctx: null, stream: null, node: null, buf: [], bytes: 0 };
+    ws.onmessage = (ev) => {
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (msg.error) return stopVoice(msg.error);
+      if (msg.partial) {
+        setVoiceText(msg.partial);
+      }
+      if (msg.text !== undefined) {
+        setVoiceText(msg.text);
+        stopVoice(msg.text ? '' : '没识别到内容，再说一次');
+      }
+    };
+    ws.onclose = (e) => {
+      // 正常结束是我们自己 close 的（code 1000/1005），其它都算异常，说清楚
+      if (rec) stopVoice(e.code === 1000 || e.code === 1005 ? '' : '识别连接断了：' + e.code);
+    };
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch {
+      // Android WebView 上 echoCancellation/noiseSuppression 有时直接 OverconstrainedError，
+      // 退回最宽松的约束再试一次；还不行就把原因抛给调用方
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (second) {
+        throw new Error(MIC_ERROR + '（' + (second.name || '') + '）');
+      }
+    }
+
+    // 等异步的这段时间里用户可能又点了一次（rec 被清空），这里及时收摊，别把麦克风留着
+    if (!rec) {
+      for (const t of stream.getTracks()) t.stop();
+      return;
+    }
+
+    // 不指定 16000：Android 8.1 上 16k 采集会给静音流，让系统用默认率、我们自己重采样
+    const ctx = new AudioContext();
+    if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+    // 等音轨真的活了再建 source：Android 上过早连接会拿到一路静音
+    const track = stream.getAudioTracks()[0];
+    if (track && track.readyState !== 'live') {
+      await Promise.race([
+        new Promise((r) => {
+          track.onunmute = r;
+        }),
+        sleep(500),
+      ]);
+    }
+    await sleep(150);
+    const src = ctx.createMediaStreamSource(stream);
+    const sink = ctx.createGain();
+    sink.gain.value = 0; // 别把麦克风回放到喇叭
+    src.connect(sink);
+    sink.connect(ctx.destination);
+
+    rec.ctx = ctx;
+    rec.stream = stream;
+    const rate = ctx.sampleRate;
+
+    const onSamples = (samples) => {
+      if (!rec) return; // 停止时队列里可能还剩一帧
+      const pcm = toPcm16(downsample(samples, rate));
+      rec.buf.push(new Uint8Array(pcm.buffer));
+      rec.bytes += pcm.byteLength;
+      if (rec.bytes >= 3200) flushVoice(); // 100ms 一帧
+    };
+
+    if (!rec) {
+      for (const t of stream.getTracks()) t.stop();
+      ctx.close().catch(() => {});
+      return;
+    }
+
+    let worklet = null;
+    if (ctx.audioWorklet) {
+      try {
+        await ctx.audioWorklet.addModule('/assets/recorder-worklet.js?v=17');
+        worklet = new AudioWorkletNode(ctx, 'homeos-recorder');
+      } catch {
+        worklet = null; // 有些 WebView 拿不到 worklet，直接走下面的兜底
+      }
+    }
+    if (worklet) {
+      worklet.port.onmessage = (e) => onSamples(e.data);
+      worklet.port.postMessage({ on: true });
+      src.connect(worklet);
+      worklet.connect(sink);
+      rec.node = worklet;
+    } else {
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      proc.onaudioprocess = (e) => onSamples(new Float32Array(e.inputBuffer.getChannelData(0)));
+      src.connect(proc);
+      proc.connect(sink);
+      rec.node = proc;
+    }
+  }
+
+  function flushVoice() {
+    if (!rec || rec.ws.readyState !== WebSocket.OPEN) return;
+    const chunk = new Uint8Array(rec.bytes);
+    let at = 0;
+    for (const part of rec.buf) {
+      chunk.set(part, at);
+      at += part.length;
+    }
+    rec.buf = [];
+    rec.bytes = 0;
+    rec.ws.send(chunk.buffer);
+  }
+
+  function setVoiceText(text) {
+    say.value = baseText ? baseText + text : text;
+    grow();
+  }
+
+  function stopVoice(error) {
+    const cur = rec;
+    rec = null;
+    clearTimeout(cur?.endTimer);
+    mic.setAttribute('aria-pressed', 'false');
+    if (!cur) return;
+    if (cur.node && cur.node.port) cur.node.port.postMessage({ on: false });
+    if (cur.stream) for (const track of cur.stream.getTracks()) track.stop();
+    if (cur.ctx) cur.ctx.close().catch(() => {});
+    if (cur.ws.readyState === WebSocket.OPEN) cur.ws.close();
+    if (error) fail(error);
+    else say.focus();
+  }
+
+  mic.addEventListener('click', async () => {
+    if (rec) {
+      // 让后端收尾；万一它不回，6 秒后自己停，别把按钮永远按着
+      if (rec.ws.readyState === WebSocket.OPEN) {
+        rec.ws.send('end');
+        rec.endTimer = setTimeout(() => stopVoice('没听到结果，再说一次'), 6000);
+      } else {
+        stopVoice('');
+      }
+      return;
+    }
+    mic.setAttribute('aria-pressed', 'true');
+    try {
+      await startVoice();
+    } catch (err) {
+      stopVoice(err.message || MIC_ERROR);
+    }
+  });
+
+  say.addEventListener('input', grow);
+
+  fresh.addEventListener('click', async () => {
+    invalidate();
+    setBusy(false);
+    try {
+      cache(await api('/api/agent/new', { mode }));
+      say.value = '';
+      grow();
+      hint();
+    } catch (err) {
+      hint();
+      fail('开新对话失败：' + err.message);
+    }
+  });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -277,6 +500,7 @@
     setBusy(true);
     const token = ++epoch;
     say.value = '';
+    grow();
     paint();
     DOM.user.textContent = text;
     DOM.note.textContent = WORKING;
@@ -295,8 +519,6 @@
 
   const saved = read(MODE_KEY);
   mode = HINT[saved] ? saved : 'chat';
-  for (const b of tabs.querySelectorAll('button[data-mode]')) {
-    b.toggleAttribute('aria-current', b.dataset.mode === mode);
-  }
+  markTab();
   load();
 })();
