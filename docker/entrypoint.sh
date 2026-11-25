@@ -39,6 +39,14 @@ ensure_opencode_password() {
 # 两个模式走同一套环境：只有绑定地址、数据目录、uvicorn 是否 reload 不同
 prepare() {
   local m="$1"
+  # 本机跑时把仓库根的 .env 读进来（容器里没有这个文件：Dockerfile 只 COPY 代码，
+  # 环境变量由 compose 注入）。它是 shell 赋值：值含空格/特殊字符要加引号，否则会被拆词。
+  if [ -f "$ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ROOT/.env" || echo "读 $ROOT/.env 出错，检查里面的赋值" >&2
+    set +a
+  fi
   # 显式设了 HOMEOS_DEV 就以它为准：NAS 调试栈靠这个在容器里开热重载
   export HOMEOS_DEV="${HOMEOS_DEV:-$([ "$m" = dev ] && echo 1 || echo 0)}"
   if [ "$m" = container ]; then

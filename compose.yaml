@@ -5,14 +5,25 @@ services:
     image: ghcr.io/uglyboy-tl/homeos:latest
     container_name: homeos
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    # 不发布宿主端口：走 Traefik 反代（域名 → 容器 8080），HTTPS 也由 Traefik 终止，
+    # 这样设备上 getUserMedia（麦克风）才有 secure context。
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homeos.rule=Host(`homeos.uglyboy.cn`)
+      - traefik.http.services.homeos.loadbalancer.server.port=8080
+      - traefik.docker.network=traefik
+    networks:
+      - traefik
     environment:
       HOMEOS_DATA_DIR: /data
       # 模型/搜索 key：栈目录里的 .env 提供，compose 自动加载并在这里引用。
       # 不挂宿主机 auth.json——opencode 的凭据只走环境变量（见 opencode/opencode.jsonc）
       OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
+      # 语音识别（Azure 实时 WS）：不填则 /api/asr/stream 连上就报错
+      HOMEOS_ASR_HOST: ${HOMEOS_ASR_HOST:-}
+      HOMEOS_ASR_KEY: ${HOMEOS_ASR_KEY:-}
+      HOMEOS_ASR_LANG: ${HOMEOS_ASR_LANG:-zh-CN}
       TZ: Asia/Shanghai
     volumes:
       # 功能页：agent 唯一能写的地方，备份它就是备份全部用户内容
@@ -24,7 +35,9 @@ services:
     # 运行时状态（opencode 配置副本/session、米家缓存）不持久化：重启即重建
     tmpfs:
       - /tmp:size=512m
-      - /data:size=1g
+      # 显式 1777：/data 下面还挂着米家登录态（bind），有嵌套挂载时 Docker 会把 tmpfs 根
+      # 建成 root:0755，uid 1000 就建不了 /data/config，容器直接起不来
+      - /data:size=1g,mode=1777
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -34,3 +47,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+networks:
+  # 与 base/ 里的 traefik 共用（docker network create traefik 或由 traefik 栈创建）
+  traefik:
+    external: true

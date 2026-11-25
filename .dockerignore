@@ -14,3 +14,4 @@ opencode/opencode.env
 web/pages/*
 .ruff_cache/
 .agents/
+.env
