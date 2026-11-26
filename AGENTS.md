@@ -11,13 +11,15 @@
 ```
 app/                     镜像内 Python（只读）
   main.py                装配：路由表 + lifespan
-  config.py              唯一读环境变量的地方（端口、路径、DEV、令牌）
-  security.py            认证：页面 cookie / 请求头令牌
+  config.py              配置与常量：读 config/*.yaml、缺配置检查、超时
   scan.py                扫 web/pages/*/meta.json，给首页与 /api/pages 用
-  routes/                pages.py  mijia.py  asr.py  agent.py  oc.py  health.py
-  services/              mijia.py  asr.py  agent.py  opencode.py
-  _proxy.py              /oc 的反代（流式/非流式同一份）
-  runtime.py             关服务时让 SSE 生成器退出
+  routes/               HTTP 映射：校验、错误码、路由级依赖（config.ready）
+  services/             业务实现；除 agent/asr 外都是 sync def（mijiaAPI 会堵事件循环）
+  lib/                   横切模块（与具体业务无关，可被任何路由复用）
+    security.py          认证：页面 cookie / 请求头令牌
+    sockets.py           WS 约定：缺配置回 error 帧、客户端已走的判断
+    proxy.py             /oc 的反代（流式/非流式同一份）
+    shutdown.py          关闭信号：让 SSE 生成器自己退出
 
 web/                     前端，纯静态零构建
   home.html  mijia.html  agent.html        三个固定页
@@ -26,10 +28,14 @@ web/                     前端，纯静态零构建
   pages/<slug>/          ★卷：功能页（agent 唯一能写的地方）index.html + meta.json + assets/
 
 opencode/                opencode 配置根（XDG_CONFIG_HOME=<仓库根>）
-docker/  Dockerfile entrypoint.sh
+docker/  Dockerfile entrypoint.sh prepare.py logging.json
+scripts/  dev.sh（本机托管）  sync.sh（只推 app/ web/ 到 NAS）
 compose.yaml             NAS 部署（read_only + 卷 + Traefik 标签）
-tests/  docs/  config/mijia.yaml
+tests/  docs/  config/
 ```
+
+配置：外部服务/令牌/key 进 `config/homeos.yaml`，设备表进 `config/mijia.yaml`，`.env` 只做 key 覆盖；
+仓库两份是空白模板（真值在 `.devdata/config/` 与机器上的 `./config/`），字段表见 `config/README.md`。
 
 三条分界线：
 
@@ -49,12 +55,14 @@ tests/  docs/  config/mijia.yaml
 新增能力先在 `web/pages/` 里用起来，出现第二个客户端才谈通用化。能被一行 `curl` 直连上游
 完成的事不进网关（Jellyfin/Immich/Miniflux 都有自己的 API）。
 
-**认证两档**（`app/security.py`，威胁模型见 ARCHITECTURE §8）：
+**认证两档**（`app/lib/security.py`，威胁模型见 ARCHITECTURE §8）：
 
 - 自家前端：页面响应种 `homeos` cookie（`HttpOnly; SameSite=Strict`，https 才加 `Secure`），
   fetch 自动带上。cookie 里是令牌的派生值（页面响应不认证就发，原文等于公开钥匙）。
-- 其他设备/程序：`X-HomeOS-Token: $HOMEOS_TOKEN`。`/api/*`（除 `/api/ready`）认这两者之一。
-- `/oc` 只认令牌原文，不认 cookie；未配置令牌时页面与 `/api/*` 放行、`/oc` 关闭（403）。
+- 其他设备/程序：请求头 `X-HomeOS-Token: <config/homeos.yaml 的 server.token>`。
+  `/api/*`（除 `/api/ready`）认这两者之一。
+- `/oc` 只认令牌原文，不认 cookie。未配令牌时：`HOMEOS_DEV=1` 放行页面与 `/api/*`，生产一律 401，
+  `/oc` 关闭（403）；容器启动会自动生成一个。
 
 ## 代码原则
 
@@ -69,10 +77,18 @@ tests/  docs/  config/mijia.yaml
 注释只留三种：非显然的约束（外部协议、并发、平台差异）、反直觉的取舍、不这样写就会错的地方。
 复述代码、叙述设计意图、抄文档结论、`# ---- 名称 ----` 分隔横幅都不算。
 
+## 工作流
+
+- 改动先在本地 `scripts/dev.sh` + `pytest` 验：页面、`/api/*`、米家、MPD、notify、ASR 本机都能跑。
+- 只有镜像层（`entrypoint.sh`、`prepare.py`、镜像体积）要靠重建镜像验证，`sync.sh` 送不到那里；
+  其余改动 `sync.sh --go` 推上去即生效（app/ 热重载、web/ 刷新）。
+- NAS 上的 `config/`、`.env` 是真值，脚本不推它们。
+
 ## 命令
 
 ```bash
-./docker/entrypoint.sh up|down|restart [web|agent|all]|status|log   # 本机后台托管
+./scripts/dev.sh up|down|restart [web|agent|all]|status|log   # 本机后台托管
+./scripts/sync.sh [--go] [--restart]        # 推 app/ web/ compose.yaml（默认演练）；docker/ config/ 不推
 uv run pytest -q                             # 不联网，约 1 秒
 uv run ruff check . && uv run ruff format .
 bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则见 biome.jsonc）
@@ -91,8 +107,8 @@ bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则�
 | 14100 | opencode serve，只听 127.0.0.1（外部只能经 `/oc`） |
 
 容器 `read_only: true`；`/tmp` tmpfs 512m、`/data` tmpfs 1g（mode=1777，有嵌套绑定挂载时必须显式），
-所以运行时状态不跨重启。绑定只有两处（调试形态再加 app/ web/）：`./web/pages`（功能）、
-`~/.config/mijia-api`（米家登录态，库写死路径）。
+所以运行时状态不跨重启。绑定只有两处（调试形态再加 app/ web/ docker/）：栈目录的 `./pages` →
+`/app/web/pages`（功能）、`~/.config/mijia-api`（米家登录态，库写死路径）。
 
 ## 不要做
 
@@ -100,14 +116,18 @@ bunx @biomejs/biome@2.6.8 check --write .    # 前端 lint + 格式化（规则�
 - 不引第二种皮肤：没有 `?p=`、没有 `data-profile`、没有服务端注入。页面就是完整 HTML，能单独拷走。
 - 不引构建步骤、CDN、外部字体、前端框架。图标用 `assets/icons.svg` 的 symbol 或内联 SVG。
   例外：固定页可用 `web/assets/vendor/` 的本地副本（Alpine + persist）；功能页不得引任何框架。
-- 不写死密钥：走环境变量或 `.env`（不进 git）。web ↔ opencode 的服务密码由 entrypoint 生成。
+- 不写死密钥：外部服务（gotify/beszel/asr）的 token、对外令牌、opencode 密码都进
+  `config/homeos.yaml`（内网服务，随部署目录走）；`app/` 里不出现任何密钥字面量。
 - 不做登录体系（没有用户、没有会话管理）：页面 cookie、程序令牌，主边界是网络层。
 - 不自动 `git commit` / `git push`。
-- 不以 `HOMEOS_*` 之外的名义读环境变量；新变量一律先进 `app/config.py`。一次性操作当场用命令行做，
-  不往 `entrypoint.sh` 里加分支。
+- 环境变量只当“可轮换 token”的覆盖（`GOTIFY_TOKEN`、`AZURE_SPEECH_KEY`、`OPENCODE_GO_API_KEY`、
+  `EXA_API_KEY`）；密码、口令、运行参数不走环境变量，新变量先进 `app/config.py`。
+  一次性操作当场用命令行做，不往 `docker/entrypoint.sh` 里加分支（本机的东西放 `scripts/dev.sh`）。
 
 ## 已知的坑
 
+- **镜像层是累加的**：`COPY --from` 拷进来的二进制（如 uv 的 36MB）后面 `rm` 只盖层、不减体积；
+  “装完就卸”的东西必须在同一个 `RUN` 里装与卸，否则镜像反而变大。
 - **米家必须 sync def**：`mijiaAPI` 一次读回约 1s，`async def` 会堵住事件循环，整站跟着卡。
 - **写后要读回确认**：`set()` 只回 ack，云接口约 1s 延迟，所以间隔 0.4s 重读最多 4 次，等于目标值
   才算成功；前端拿服务端读回的值才变色，失败不假装成功（墨水屏上宁可等 1s 也别翻两次）。

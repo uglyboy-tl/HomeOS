@@ -31,11 +31,11 @@
 ## 开发
 
 ```bash
-./docker/entrypoint.sh up            # web(8080) + opencode(14100)
-./docker/entrypoint.sh restart web   # web|agent|all
-./docker/entrypoint.sh status|log|down
+./scripts/dev.sh up                 # web(8080) + opencode(14100)，后台
+./scripts/dev.sh restart web         # web|agent|all
+./scripts/dev.sh status|log|down
 
-uv run pytest -q                     # 74 条，不联网
+uv run pytest -q                     # 全绿，不联网
 uv run ruff check . && uv run ruff format .
 bunx @biomejs/biome@2.6.8 check --write .   # 前端（web/ 下的固定页与 assets）lint + 格式化
 ```
@@ -59,10 +59,10 @@ NAS 上统一放在 `Docker/` 目录下（群晖 `/volume1/Docker/HomeOS`、威�
 
 ```bash
 # NAS 上：整个部署目录只需要这些东西（其余都是镜像里的）
-#   compose.yaml  .env  web/pages/         ← 生产（卷是 ./web/pages，compose 里写死了）
-#   + app/ web/ + 自己写的 compose.dev.yaml ← 调试（改代码不用重建镜像；该文件不进仓库）
+#   compose.yaml  .env  config/  pages/       ← 生产（两个卷路径写死在 compose 里）
+#   + app/ web/ + 自己写的 compose.dev.yaml   ← 调试（改代码不用重建镜像；该文件不进仓库）
 cp .env.example .env          # 必须有：compose 用 env_file 读它，缺了起不来
-#   填 HOMEOS_TOKEN 与模型/搜索 key；其余项留空就用 app/config.py 里的默认值
+#   填 opencode 的模型/搜索 key（其余配置在 config/homeos.yaml，部署时再填）
 docker compose pull && docker compose up -d
 ```
 
@@ -75,7 +75,7 @@ docker compose pull && docker compose up -d
 
 | 要什么 | 放哪 | 怎么进容器 |
 |---|---|---|
-| 设备表 `mijia.yaml` | 镜像里的那份（仓库 `config/`） | 默认不挂卷；想改设备表就把 `compose.yaml` 里 `./config` 那行注释放开并放一份 `config/`（见 `config/README.md`） |
+| 设备表 `mijia.yaml` | 宿主机 `./config/`（挂进 `/app/config`，空目录会从镜像模板生成） | `compose.yaml` 里 `./config:/app/config` 必挂；填法见 `config/README.md` |
 | 登录态（`auth.json` + 设备 json） | 宿主机 `$XDG_CONFIG_HOME/mijia-api/`（没设时是 `~/.config/mijia-api/`） | compose 把这个目录挂到 `/data/.config/mijia-api`（rw，库要刷新 token） |
 
 登录态不拷贝：哪台机器跑容器就在哪台登录一次，容器里读的就那一份。在 NAS 上重新扫码后
@@ -85,12 +85,11 @@ docker compose pull && docker compose up -d
 自身写死 `~/.config`，不认 XDG：如果你把 `XDG_CONFIG_HOME` 改到了别处，要么在那儿登录一次让
 库把 `mijia-api/` 建在那里，要么把已有目录移过去——否则挂到的是空目录，米家页 503。
 
-opencode 的服务密码（web ↔ opencode 之间）由 entrypoint 首次启动自动生成，
-落在 `data/auth/opencode`，不需要任何人手填。
+opencode 的口令（web ↔ opencode）由容器启动时生成进 `config/homeos.yaml` 的 `opencode.serve_password`，
+每次重启重换，不需要任何人手填。
 
-镜像只支持 arm64，opencode 版本与 sha256 钉在 `docker/Dockerfile`。镜像里带一份仓库里的
-`config/mijia.yaml`，不挂卷也能跑；`config/` 只读挂进容器后以机器上那份为准，改设备表不用重建镜像。
-本机没有 docker，这套还没在真机验证过。
+镜像只支持 arm64，opencode 版本与 sha256 钉在 `docker/Dockerfile`。配置默认用镜像里的
+`/app/defaults/` 模板，宿主 `./config/` 是空目录时启动复制过去。
 
 ### 用 GitHub 构建的镜像
 
@@ -121,12 +120,13 @@ docker compose pull && docker compose up -d
 | 谁 | 怎么过 | 体验 |
 |---|---|---|
 | 自家前端（任何浏览器打开页面） | 页面响应种 `HttpOnly; SameSite=Strict` 的 `homeos` cookie（值是令牌的 HMAC 派生值，不是原文），之后 fetch 自动带上 | 零感知，页面代码里没有令牌 |
-| 其他设备/程序 | 请求头 `X-HomeOS-Token: $HOMEOS_TOKEN` | 一行 header |
+| 其他设备/程序 | 请求头 `X-HomeOS-Token: <config/homeos.yaml 的 server.token>` | 一行 header |
 | `/api/ready` | 不认证 | 容器健康检查用 |
 | `/oc` | 只认请求头（等于 shell 权限，cookie 不行）；未配令牌 → 403 关闭 | — |
 
-`HOMEOS_TOKEN` 没配时：页面与 `/api/*` 照常可用（本机开发），`/oc` 关闭。生成：
-`openssl rand -hex 24`。
+令牌与 opencode 口令由容器启动时写进 `config/homeos.yaml`（令牌首次生成后固定，口令每次重换）；
+未配令牌时：`HOMEOS_DEV=1` 才放行页面与 `/api/*`，生产一律 401，`/oc` 关闭；容器启动会自动生成一个
+（首次固定，重启不换）。
 
 这层挡的是误用与扫描，**不是**定向攻击——任何能 GET 页面的人都拿得到合法 cookie（只是调不了 `/oc`）。
 主边界在网络层：

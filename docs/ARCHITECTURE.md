@@ -39,7 +39,6 @@ Immich、Miniflux、Gotify、AdGuard、Beszel 都有自己的 HTTP API，客户�
 app/                     镜像内 Python（只读）
   main.py                装配：路由表 + lifespan
   config.py              唯一读环境变量的地方
-  security.py            认证：页面 cookie + 请求头令牌
   scan.py                扫 web/pages/*/meta.json，给首页与 /api/pages 用
   routes/
     pages.py             /  /mijia  /agent  /p/<slug>  /assets/*  /pages/<slug>/assets/*
@@ -55,8 +54,11 @@ app/                     镜像内 Python（只读）
     agent.py             对话对账、SSE 订阅、播报副作用
     asr.py               Azure 实时 WS：帧格式、共用 X-RequestId
     opencode.py          上游地址与 Basic 头
-  _proxy.py              /oc 的反代（流式/非流式同一份）
-  runtime.py             关服务时让 SSE 生成器退出
+  lib/                    横切模块：认证 / WS 约定 / 反代 / 关闭信号
+    security.py          认证：页面 cookie + 请求头令牌
+    sockets.py           WS：缺配置回 error 帧
+    proxy.py             /oc 的反代（流式/非流式同一份）
+    shutdown.py          关闭信号：让 SSE 生成器自己退出
 
 web/                     前端，纯静态零构建
   home.html              首页：固定页写死，功能页由 home.js 从 /api/pages 追加
@@ -68,8 +70,10 @@ web/                     前端，纯静态零构建
 
 opencode/                opencode 配置根（XDG_CONFIG_HOME=<仓库根>）
   AGENTS.md  agents/{chat,pages,device}.md  opencode.jsonc  cli.json
-config/mijia.yaml        米家设备表 + tts
-docker/  Dockerfile entrypoint.sh
+config/homeos.yaml        外部服务接入信息与令牌
+config/mijia.yaml         米家设备表 + tts
+docker/  Dockerfile entrypoint.sh prepare.py logging.json
+scripts/  dev.sh（本机托管）  sync.sh（只推 app/ web/）
 compose.yaml             NAS 部署（read_only + 卷 + Traefik 标签）
 ```
 
@@ -98,12 +102,13 @@ html { font-size: calc(min(100vw / var(--vw), 100vh / var(--vh))); }  /* 1rem = 
 | GET | `/api/mijia/devices` | 房间顺序 + 每台设备 id/名字/房间/类型 | 通用（需认证） |
 | GET | `/api/mijia/state?room=` | 全部或一间房的状态（开关 3s / 温湿度 300s / 烟感 900s）；**中文要 URL 编码** | 通用（需认证） |
 | POST | `/api/mijia/switch` | `{id,on}`，返回读回确认后的真实值；未知开关 400、云不可用 503 | 通用（需认证） |
-| POST | `/api/mijia/say` | `{text}`，让音箱念（先记再播，多客户端只响一遍） | 通用（需认证） |
+| POST | `/api/mijia/say` | `{text,did?}`，让音箱念；`did` 空则用 `mijia.yaml` 的 `tts.did`，非数字 400 | 通用（需认证） |
 | POST | `/api/agent/ask` | `{input,prompt?,timeout?,speak?}` → 一段解读 + 耗时/模型/token；独立会话、跑完即删 | 通用（需认证） |
 | GET | `/api/mpd/state` | 播放状态 + 当前曲目 + 列表长度；`?device=mpd` | 通用（需认证） |
 | POST | `/api/mpd/control` | `{action,device?,playlist?,volume?,random?,repeat?,crossfade?,on?}`，返回执行后的状态 | 通用（需认证） |
 | POST | `/api/mpd/sync` | `{rebuild?}`：update 索引，rebuild 再按一级目录重建同名列表（实测 614 首 0.8s，硬上限 60s，同时只允许一次否则 409） | 通用（需认证） |
 | POST | `/api/notify` | `{text,title?,level?,channels?}`：逐通道发送，返回每个通道的结果 | 通用（需认证） |
+| GET | `/api/metrics` | NAS 本机指标（cpu/负载/内存/温度/磁盘/网络/uptime），来自 Beszel 最新 1 分钟采样；Beszel 不可用 503 | 通用（需认证） |
 | GET | `/api/agent/turn` | 取本轮状态与正文 | 会话 |
 | GET | `/api/agent/stream` | SSE 推进度（服务端限流 4 次/秒） | 会话 |
 | POST | `/api/agent/new` `/bind` `/model` | 新对话 / 绑定会话 / 选模型 | 会话 |
@@ -115,10 +120,12 @@ html { font-size: calc(min(100vw / var(--vw), 100vh / var(--vh))); }  /* 1rem = 
 "只加不改"：上表被其他客户端调用后，不改路径、不改语义、不改返回形状。
 （`/api/agent/ask` 在引入本次功能时形状从 `{mode,text}` 换成了 `{input,prompt}`，旧的会 422；从此之后按上面这条守。）
 
+下面的示例里 `$TOKEN` 指 `config/homeos.yaml` 的 `server.token`。
+
 给其他程序用的一次调用（内部固定 `chat` agent，独立会话、不碰页面状态、默认不播报）：
 
 ```bash
-curl -sS -H "X-HomeOS-Token: $HOMEOS_TOKEN" -H 'Content-Type: application/json' \
+curl -sS -H "X-HomeOS-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"input":"<日志/数据>","prompt":"两句话说清失败原因","speak":true}' \
   https://homeos.uglyboy.cn/api/agent/ask
 # → {"ok":true,"text":"…","model":"…","elapsed_ms":3210,"tokens":{…},"cost":0.0006,"truncated":false}
@@ -133,13 +140,13 @@ curl -sS -H "X-HomeOS-Token: $HOMEOS_TOKEN" -H 'Content-Type: application/json' 
 
 ```bash
 # 每晚播「深度睡眠」：一次调用把列表、随机、循环、音量都定下来
-curl -sS -H "X-HomeOS-Token: $HOMEOS_TOKEN" -H 'Content-Type: application/json' \
+curl -sS -H "X-HomeOS-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"action":"play","playlist":"深度睡眠","volume":30,"random":true,"repeat":true,"crossfade":2}' \
   https://homeos.uglyboy.cn/api/mpd/control
 
-curl -d '{"action":"volume","volume":26}' -H "X-HomeOS-Token: $HOMEOS_TOKEN" \
+curl -d '{"action":"volume","volume":26}' -H "X-HomeOS-Token: $TOKEN" \
   -H 'Content-Type: application/json' https://homeos.uglyboy.cn/api/mpd/control
-curl -d '{"action":"stop"}' -H "X-HomeOS-Token: $HOMEOS_TOKEN" \
+curl -d '{"action":"stop"}' -H "X-HomeOS-Token: $TOKEN" \
   -H 'Content-Type: application/json' https://homeos.uglyboy.cn/api/mpd/control
 ```
 
@@ -149,7 +156,7 @@ curl -d '{"action":"stop"}' -H "X-HomeOS-Token: $HOMEOS_TOKEN" \
 
 通知：一条正文，默认只推 Gotify；要出声必须显式加 `speak`（半夜的备份告警不该喊醒人）。
 ```bash
-curl -sS -H "X-HomeOS-Token: $HOMEOS_TOKEN" -H 'Content-Type: application/json' \
+curl -sS -H "X-HomeOS-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"text":"备份链异常 2 项：…","title":"⚠️ 备份链异常","level":"error"}' \
   https://homeos.uglyboy.cn/api/notify
 # → {"ok":true,"results":{"gotify":{"ok":true,"id":6401}}}
@@ -164,7 +171,7 @@ curl -sS -H "X-HomeOS-Token: $HOMEOS_TOKEN" -H 'Content-Type: application/json' 
 
 ```bash
 curl -sG https://homeos.uglyboy.cn/api/mijia/state \
-  -H "X-HomeOS-Token: $HOMEOS_TOKEN" --data-urlencode "room=客厅"
+  -H "X-HomeOS-Token: $TOKEN" --data-urlencode "room=客厅"
 ```
 
 页面里用 `encodeURIComponent`，天然没问题；POST 接口的房间名走 body，也不受影响。
@@ -193,7 +200,7 @@ curl -sG https://homeos.uglyboy.cn/api/mijia/state \
 
 - 根文件系统 `read_only: true`；`/tmp` tmpfs 512m（agent 的暂存区）；
   `/data` tmpfs 1g **mode=1777**（嵌套挂载米家登录态时 Docker 会把 tmpfs 根建成 root:0755）。
-- 卷：`./web/pages`（功能，备份它就备份全部用户内容）、
+- 卷：`./pages` → `/app/web/pages`（功能，备份它就备份全部用户内容）、
   `~/.config/mijia-api`（米家登录态，库写死路径）。
 - 部署不发布宿主端口，走 Traefik：`https://homeos.uglyboy.cn` —— HTTPS 才有 secure context，
   墨水屏上麦克风才能用。
@@ -205,13 +212,13 @@ curl -sG https://homeos.uglyboy.cn/api/mijia/state \
   AAAA 记录，等于公开了家庭 IPv6；拿 `Host: homeos.uglyboy.cn` 对着它请求就能打到本服务。
   所以"内网自用"不是安全边界，**网络层要挡**（Traefik `ipAllowList` 只放内网段）。
 
-**认证分两档**（`app/security.py`）：
+**认证分两档**（`app/lib/security.py`）：
 
 - 自家前端：页面响应种 `homeos` cookie（`HttpOnly; SameSite=Strict`，https 才加 `Secure`）。
   cookie 值是 `HMAC(令牌, 固定盐)` 的派生值——页面响应本身不认证，放原文等于把 `/oc` 的钥匙公开。
-- 其他设备/程序：`X-HomeOS-Token: $HOMEOS_TOKEN`。`/api/*`（除 `/api/ready`）认这两者之一。
+- 其他设备/程序：`X-HomeOS-Token: <config/homeos.yaml 的 server.token>`。`/api/*`（除 `/api/ready`）认这两者之一。
 - `/oc` 只认令牌原文，不认 cookie；未配令牌 → 403 关闭。
-- 未配置 `HOMEOS_TOKEN`：页面与 `/api/*` 放行（本机开发），`/oc` 关闭；令牌格式非法时同样降级并记 error。
+- 未配置时：`HOMEOS_DEV=1` 才放行页面与 `/api/*`，生产一律 401，`/oc` 关闭；格式非法时同样降级并记 error。
 - 这一层挡的是误用与扫描，**不是**定向攻击（任何能 GET 页面的人都拿到合法 cookie）。主边界是网络层。
 - **家宽上任何"内网自用"服务都不能加公网 A/AAAA 记录**，除非先补认证。
 
