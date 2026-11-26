@@ -96,7 +96,7 @@ def human_error(message: str) -> str:
     if not low:
         return "助手出错了，稍后再试"
     if "requires an api key" in low or "provider.auth" in low or "unauthorized" in low:
-        return "模型没授权，检查 .env 里的 key"
+        return "模型没授权，检查 config/homeos.yaml 的 opencode.go_api_key"
     if "no-route" in low or "no such model" in low or "model not found" in low:
         return "这个模型不存在或没配好，检查模型名"
     if "usage limit" in low or "rate limit" in low or "too many requests" in low:
@@ -113,7 +113,7 @@ def _ordered(messages: list[dict]) -> list[dict]:
     )
 
 
-def _text(message: dict) -> str:
+def _message_text(message: dict) -> str:
     """用户那句存在消息顶层的 text，assistant 的正文在 content parts 里。"""
     if message.get("text"):
         return message["text"]
@@ -136,7 +136,7 @@ def summarize(messages: list[dict], after: str = "") -> dict | None:
     for m in ordered[last_user + 1 :]:
         if m.get("type") != "assistant":
             continue
-        text = _text(m)
+        text = _message_text(m)
         done = bool((m.get("time") or {}).get("completed"))
         err = m.get("error") or {}
         finish = m.get("finish") or m.get("rawFinish") or ""
@@ -144,7 +144,12 @@ def summarize(messages: list[dict], after: str = "") -> dict | None:
             error = human_error(str(err.get("message") or err.get("type") or ""))
         elif finish and finish not in ("stop", "tool-calls"):
             error = human_error("")  # 没有 error 对象但收尾异常：别当成"还在跑"
-    return {"question": _text(ordered[last_user]), "text": text, "done": done, "error": error}
+    return {
+        "question": _message_text(ordered[last_user]),
+        "text": text,
+        "done": done,
+        "error": error,
+    }
 
 
 def check(mode: str) -> dict:
@@ -270,9 +275,7 @@ async def turn(mode: str) -> dict:
         await resync(mode)
 
     now = time.monotonic()
-    # 「已完成但还没正文」：消息先落库、正文随后才补齐（实测会出一帧空 done）。
-    # 宽限期内当还在工作；过期仍没有就转成错误——前端只在"有正文的 done"或 error 上收尾，
-    # 一直挂在 done+空正文会让发送按钮永久卡住。
+    # 实测会有一帧空 done：宽限期内当还在工作，过期转错误，否则发送按钮永久卡住
     if st["state"] == "done" and not st["text"] and not st["error"]:
         st["empty_since"] = st["empty_since"] or now
         if now - st["empty_since"] < EMPTY_GRACE:
@@ -409,7 +412,7 @@ def compact(messages: list[dict], limit: int = 20) -> list[dict]:
     rows = []
     for m in _ordered(messages or [])[-limit:]:
         row = {"type": m.get("type"), "at": (m.get("time") or {}).get("created")}
-        row["text"] = _text(m)
+        row["text"] = _message_text(m)
         if m.get("type") == "assistant":
             row["done"] = bool((m.get("time") or {}).get("completed"))
             for key in ("finish", "tokens", "cost"):

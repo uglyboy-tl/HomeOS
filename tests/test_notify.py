@@ -78,11 +78,10 @@ def test_one_channel_failing_does_not_stop_the_other(gotify, spoken, monkeypatch
     assert out["speak"] == {"ok": False, "error": "米家没登录"}
 
 
-def test_missing_token_is_reported_not_raised(monkeypatch, spoken):
+def test_missing_token_is_a_config_error(monkeypatch):
     monkeypatch.setattr(config, "GOTIFY_TOKEN", "")
-    out = notify.send("x")
-    assert out["gotify"]["ok"] is False
-    assert "HOMEOS_GOTIFY_TOKEN" in out["gotify"]["error"]
+    with pytest.raises(config.NotConfigured, match="gotify.token"):
+        config.require("gotify.url", "gotify.token")
 
 
 def test_unknown_channel_comes_back_as_that_channel_failing(gotify, spoken):

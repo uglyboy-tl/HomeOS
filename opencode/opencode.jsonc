@@ -1,28 +1,26 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // 插件：cc-safety-net（危险命令拦截）。镜像构建时已装好并缓存，运行时不联网。
+  // 危险命令拦截；镜像构建时装好，运行时不联网
   "plugin": ["cc-safety-net"],
-  // 网页搜索：用 Exa（key 走环境变量 EXA_API_KEY）
+  // 搜索用 Exa，需要 EXA_API_KEY
   "websearch": { "provider": "exa" },
-  // 全局权限（三个模式共用）：opencode 的规则集按「内置基线 → 全局 → agent」拼接，后面的覆盖前面的。
-  // 没人能回答授权请求，且 ask 没有超时，一旦落到 ask 就永久卡住 —— 可能 ask 的入口一律 deny。
+  // ask 没有超时、也没人能点确认，落到 ask 就永久卡住：可能 ask 的入口一律 deny
   "permissions": [
-    // 密钥不进上下文（内置基线对这两个是 ask，必须显式 deny 才能盖掉）
+    // 内置基线对这两个是 ask
     { "action": "read", "resource": "*.env", "effect": "deny" },
     { "action": "read", "resource": "*.env.*", "effect": "deny" },
-    // question 工具就是“提问等回答”，这里没有能点按钮的人
     { "action": "question", "resource": "*", "effect": "deny" },
-    // 子代理自带一套更宽的权限（general 是全 allow），等于旁路；谁都不该用
+    // 子代理自带更宽的权限，等于旁路
     { "action": "task", "resource": "*", "effect": "deny" },
-    // 工作目录（web/）之外的文件一律不碰，只放行 /tmp：临时脚本、试验文件都丢那里
+    // 工作目录（web/）之外不碰，只放行 /tmp 给临时脚本
     { "action": "external_directory", "resource": "*", "effect": "deny" },
     { "action": "external_directory", "resource": "/tmp/**", "effect": "allow" },
     { "action": "edit", "resource": "/tmp/**", "effect": "allow" }
   ],
-  // 上游只提供 low/high/max，none 是我们自己造的变体（chat 用 #none，不需要思考链）
+  // 上游只有 low/high/max，none 是我们造的变体（chat 不要思考链）
   "providers": {
     "opencode-go": {
-      // 密钥只从环境变量来（栈内 .env → 容器 env），不落 auth.json、不挂宿主机凭据
+      // 不落 auth.json，只从环境变量读（config/homeos.yaml 的 go_api_key）
       "settings": { "apiKey": "{env:OPENCODE_GO_API_KEY}" },
       "models": {
         "deepseek-v4.1-flash": {
@@ -33,6 +31,4 @@
       }
     }
   }
-  // 不装插件：cc-safety-net@latest 运行时要用 node/bun 下载，镜像里没有，装了只会每次重启重装。
-  // 真要装，先把 bun 打进镜像，并把缓存目录指到 /data。
 }

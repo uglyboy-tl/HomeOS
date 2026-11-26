@@ -3,12 +3,13 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from .. import config
 from ..services import mpd
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(config.ready("mpd.host"))])
 log = logging.getLogger("homeos.mpd")
 
 

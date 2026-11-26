@@ -1,7 +1,7 @@
 """认证：页面靠 cookie 免输入，其他设备/程序带 `X-HomeOS-Token`。
 
-页面响应是未认证的，所以 cookie 里放令牌的派生值而不是原文——否则任何 GET 一次页面的人
-都能拿它去调 `/oc`（等于 shell）。挡的是误用与扫描，主边界仍在网络层。
+页面响应未认证，所以 cookie 里是令牌的派生值：放原文等于把 `/oc`（shell）的钥匙公开。
+挡的是误用与扫描，主边界仍在网络层。
 """
 
 import hashlib
@@ -11,7 +11,7 @@ import logging
 from fastapi import Header, HTTPException
 from starlette.requests import HTTPConnection
 
-from . import config
+from .. import config
 
 log = logging.getLogger("homeos.security")
 
@@ -39,7 +39,7 @@ def require_auth(request: HTTPConnection, x_homeos_token: str = Header(default="
     if not config.TOKEN:
         if config.DEV:
             return
-        raise HTTPException(401, "服务端未配置 HOMEOS_TOKEN，接口已关闭")
+        raise HTTPException(401, "服务端未配置 server.token，接口已关闭")
     cookie = request.cookies.get(COOKIE, "")
     if _same(x_homeos_token, config.TOKEN) or _same(cookie, cookie_value()):
         return
@@ -58,7 +58,7 @@ def require_auth(request: HTTPConnection, x_homeos_token: str = Header(default="
 def require_token(request: HTTPConnection, x_homeos_token: str = Header(default="")) -> None:
     """`/oc` 专用：只认令牌原文（不接受页面 cookie），未配置即关闭。"""
     if not config.TOKEN:
-        raise HTTPException(403, "未配置 HOMEOS_TOKEN，/oc 已关闭")
+        raise HTTPException(403, "未配置 server.token，/oc 已关闭")
     if not _same(x_homeos_token, config.TOKEN):
         log.warning("拒绝 /oc：令牌不对，来源 %s", request.client.host if request.client else "?")
         raise HTTPException(

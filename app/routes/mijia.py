@@ -18,6 +18,7 @@ class SwitchReq(BaseModel):
 
 class SayReq(BaseModel):
     text: str
+    did: str = ""  # 空 = 用 mijia.yaml 顶层的 tts.did
 
 
 def _call(fn, *args) -> dict:
@@ -50,11 +51,13 @@ def api_switch(req: SwitchReq):
 
 @router.post("/api/mijia/say")
 def api_say(req: SayReq):
-    """让音箱念一句话（文本在小米云端合成）。"""
+    """让音箱念一句话（文本在小米云端合成）。did 指别台音箱时可不配 tts。"""
     if not req.text.strip():
         raise HTTPException(400, "播报文本是空的")
-    out = _call(mijia.say, req.text)
-    log.info("say %d 字", len(out["text"]))
+    if req.did and not req.did.isdigit():
+        raise HTTPException(400, "did 是纯数字串")
+    out = _call(mijia.say, req.text, req.did)
+    log.info("say %d 字 did=%s", len(out["text"]), out["did"])
     return out
 
 

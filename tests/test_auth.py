@@ -100,9 +100,10 @@ def test_every_api_router_is_guarded(tok):
         assert c.get(path).status_code == 401, path
 
 
-def test_invalid_token_degrades_instead_of_crashing():
+def test_invalid_token_degrades_instead_of_crashing(tmp_path):
     """写错令牌不能让面板全黑：降级成未配置（/oc 关掉），日志里说清楚。"""
-    env = {**os.environ, "HOMEOS_TOKEN": "short; bad"}
+    (tmp_path / "homeos.yaml").write_text('server: {token: "short; bad"}\n')
+    env = {**os.environ, "HOMEOS_CONFIG_DIR": str(tmp_path)}
     r = subprocess.run(
         [sys.executable, "-c", "import app.config as c; print(repr(c.TOKEN))"],
         env=env,
@@ -111,4 +112,4 @@ def test_invalid_token_degrades_instead_of_crashing():
     )
     assert r.returncode == 0
     assert r.stdout.strip() == "''"
-    assert "HOMEOS_TOKEN" in r.stderr
+    assert "server.token" in r.stderr

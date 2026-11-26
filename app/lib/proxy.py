@@ -7,7 +7,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
-from .runtime import stop_event
+from .shutdown import stop_event
 
 log = logging.getLogger("homeos.proxy")
 
@@ -41,8 +41,7 @@ async def forward(
         raise
 
     async def cleanup() -> None:
-        # 客户端在响应头之前就断开时，StreamingResponse 根本不会被迭代，
-        # 所以关连接不能只写在 gen() 的 finally 里；background 总会跑。
+        # 客户端在响应头前就断开时 gen() 根本不会被迭代，所以关连接放在 background 里
         await resp.aclose()
         await client.aclose()
 

@@ -67,7 +67,7 @@ def test_closed_when_token_unset(captured, monkeypatch):
     monkeypatch.setattr(config, "TOKEN", "")
     r = TestClient(app).get("/oc/api/info", headers={"X-HomeOS-Token": "s3cret"})
     assert r.status_code == 403
-    assert "HOMEOS_TOKEN" in r.text
+    assert "server.token" in r.text
 
 
 def test_non_ascii_token_is_rejected(captured):

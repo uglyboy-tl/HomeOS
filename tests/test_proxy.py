@@ -10,8 +10,8 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app import _proxy
-from app._proxy import forward
+from app.lib import proxy
+from app.lib.proxy import forward
 
 
 class FakeResp:
@@ -58,7 +58,7 @@ sent_headers: dict[str, str] = {}
 @pytest.fixture
 def client(monkeypatch):
     closed.clear()
-    monkeypatch.setattr(_proxy.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(proxy.httpx, "AsyncClient", FakeClient)
     app = FastAPI()
 
     @app.get("/t")
@@ -102,7 +102,7 @@ def test_streams_chunks_and_closes_everything(client):
 def test_stop_event_ends_stream(monkeypatch):
     """应用关闭时 SSE 生成器要自己退出，不能挂着等上游。"""
     closed.clear()
-    monkeypatch.setattr(_proxy.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(proxy.httpx, "AsyncClient", FakeClient)
 
     class SlowResp(FakeResp):
         async def aiter_raw(self):
@@ -112,7 +112,7 @@ def test_stop_event_ends_stream(monkeypatch):
 
     FakeClient.mode = "ok"
     monkeypatch.setattr(FakeClient, "send", lambda self, req, stream=False: _res(SlowResp([b"x"])))
-    from app.runtime import stop_event
+    from app.lib.shutdown import stop_event
 
     stop_event.set()
     try:

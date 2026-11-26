@@ -1,13 +1,13 @@
 """/oc/* → opencode 反代：注入上游 Basic 认证，并要求 `X-HomeOS-Token`（未配置即 403）。
 
-上游口令（`OPENCODE_SERVER_PASSWORD`）由 entrypoint 自动生成并 export，没人需要手填。
+上游口令由 entrypoint 每次启动随机生成并 export，没人需要手填，也不能从外部覆盖。
 """
 
 import httpx
 from fastapi import APIRouter, Depends, Request
 
-from .._proxy import forward
-from ..security import require_token
+from ..lib.proxy import forward
+from ..lib.security import require_token
 from ..services import opencode
 
 router = APIRouter()

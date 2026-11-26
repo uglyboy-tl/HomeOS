@@ -36,7 +36,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(mijia, "devices", lambda: DEVICES)
     monkeypatch.setattr(mijia, "read_state", lambda room=None: VALUES)
     monkeypatch.setattr(mijia, "set_switch", lambda sid, on: {"id": sid, "on": on})
-    monkeypatch.setattr(mijia, "say", lambda text: {"text": text.strip()})
+    monkeypatch.setattr(mijia, "say", lambda text, did="": {"text": text.strip(), "did": did})
 
 
 def test_devices_is_pure_data(fake):
@@ -75,7 +75,18 @@ def test_switch_rejects_bad_body(fake):
 def test_say_passes_text_through(fake):
     r = TestClient(app).post("/api/mijia/say", json={"text": " 开会了 "})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "text": "开会了"}
+    assert r.json() == {"ok": True, "text": "开会了", "did": ""}
+
+
+def test_say_can_target_another_speaker(fake):
+    r = TestClient(app).post("/api/mijia/say", json={"text": "开会了", "did": "380623598"})
+    assert r.status_code == 200
+    assert r.json()["did"] == "380623598"
+
+
+def test_say_rejects_non_numeric_did(fake):
+    r = TestClient(app).post("/api/mijia/say", json={"text": "喂", "did": "客厅"})
+    assert r.status_code == 400
 
 
 def test_say_rejects_bad_body(fake):
@@ -83,7 +94,7 @@ def test_say_rejects_bad_body(fake):
 
 
 def test_say_without_speaker_is_503(monkeypatch):
-    def boom(text):
+    def boom(text, did=""):
         raise mijia.MijiaError("没配播报音箱")
 
     monkeypatch.setattr(mijia, "say", boom)

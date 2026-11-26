@@ -1,12 +1,14 @@
-"""页面路由：静态 HTML 原样发出，无模板无注入。"""
+"""页面路由：静态 HTML 原样发出（无模板无注入）+ `/api/pages` 功能页清单。"""
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .. import config, scan
-from ..security import auth_cookie
+from ..lib.security import auth_cookie
 
 router = APIRouter()
+# 两个 router 是认证边界：静态页不能要令牌（页面响应自己种 cookie），`/api/pages` 必须挂认证组
+api_router = APIRouter()
 
 NO_STORE = {"Cache-Control": "no-store"}
 # 开发时也别让浏览器缓存静态资源：改完 CSS/JS 要立刻看到
@@ -63,3 +65,9 @@ def page_asset(slug: str, name: str):
 @router.get("/assets/{name:path}")
 def asset(name: str):
     return _file(f"assets/{name}")
+
+
+@api_router.get("/api/pages")
+def api_pages():
+    """首页用它列功能页（服务端不拼 HTML，列表由页面自己拉）。"""
+    return {"ok": True, "data": scan.features()}

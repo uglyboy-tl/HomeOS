@@ -39,10 +39,10 @@ def test_parse_server_frame():
     assert asr.parse_server_frame("Path:speech.phrase\r\n\r\nnot json") == ("speech.phrase", None)
 
 
-def test_not_configured(monkeypatch):
+def test_missing_key_is_a_config_error(monkeypatch):
     monkeypatch.setattr(config, "ASR_KEY", "")
-    with pytest.raises(asr.NotConfigured):
-        asr.Session(lambda text: asyncio.sleep(0))
+    with pytest.raises(config.NotConfigured, match="azure_asr.api_key"):
+        config.require("azure_asr.endpoint", "azure_asr.api_key")
 
 
 def test_session_round_trip(monkeypatch):
@@ -121,10 +121,6 @@ def test_ws_route_pushes_partials_then_text(monkeypatch):
 
 
 def test_ws_route_reports_missing_config(monkeypatch):
-    class Boom:
-        def __init__(self, *a, **k):
-            raise asr.NotConfigured("没配置")
-
-    monkeypatch.setattr(asr, "Session", Boom)
+    monkeypatch.setattr(config, "ASR_KEY", "")
     with TestClient(app).websocket_connect("/api/asr/stream") as ws:
-        assert ws.receive_json() == {"error": "没配置"}
+        assert "azure_asr.api_key" in ws.receive_json()["error"]

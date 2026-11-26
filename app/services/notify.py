@@ -16,8 +16,6 @@ PRIORITY = {"info": 2, "warn": 6, "error": 8}
 
 
 def _gotify(text: str, title: str, level: str) -> dict:
-    if not config.GOTIFY_TOKEN:
-        raise RuntimeError("未配置 HOMEOS_GOTIFY_TOKEN")
     resp = httpx.post(
         f"{config.GOTIFY_URL.rstrip('/')}/message",
         headers={"X-Gotify-Key": config.GOTIFY_TOKEN},  # 放头里：httpx 会把带 query 的 URL 写进日志

@@ -7,24 +7,32 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.responses import JSONResponse
 
-from . import config, runtime
-from .routes import agent, asr, health, mijia, mpd, notify, oc, pages
-from .security import require_auth
+from . import config
+from .lib import shutdown, sockets
+from .lib.security import require_auth
+from .routes import agent, asr, health, metrics, mijia, mpd, notify, oc, pages
 from .services import agent as agent_service
 from .services import mijia as mijia_service
+
+log = logging.getLogger("homeos")
 
 
 def _warm_mijia() -> None:
     try:
         mijia_service.warm()
     except Exception:  # noqa: BLE001 — 预热失败不影响服务，请求时还会再试
-        logging.getLogger("homeos").info("米家预热失败（未登录？），忽略")
+        log.info("米家预热失败（未登录？），忽略")
+
+
+async def _not_configured(_request, exc):  # noqa: ANN001 — FastAPI 回调签名
+    return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    runtime.stop_event.clear()
+    shutdown.stop_event.clear()
     if config.WARM_MIJIA:
         threading.Thread(target=_warm_mijia, daemon=True).start()
     # 常驻订阅 opencode 的事件流：本轮文本靠它攒，前端只按自己的节奏来取
@@ -37,7 +45,7 @@ async def lifespan(_app: FastAPI):
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
-        runtime.stop_event.set()  # 先让 SSE 生成器退出，再关服务
+        shutdown.stop_event.set()  # 先让 SSE 生成器退出，再关服务
 
 
 def create_app() -> FastAPI:
@@ -50,20 +58,24 @@ def create_app() -> FastAPI:
         openapi_url="/_openapi.json" if config.DEV else None,
         lifespan=lifespan,
     )
-    # 顺序有意义：API 在前，兜底的静态路由在后
+    # 领域异常 → HTTP：三个入口各管一类（agent 的 / 缺配置 / WS 已回帧）
     agent.install_error_handlers(app)
+    app.add_exception_handler(config.NotConfigured, _not_configured)
+    sockets.install(app)
+
     if not config.TOKEN:
-        logging.getLogger("homeos").warning(
-            "未配置 HOMEOS_TOKEN：/oc 关闭，%s",
+        log.warning(
+            "未配置 server.token：/oc 关闭，%s",
             "接口放行（DEV）" if config.DEV else "接口需令牌（生产）",
         )
-    # 所有 /api/* 统一挂认证（新增路由自动受保护），只有 /api/ready 单独挂在外面
+    # 顺序有意义：API 在前，兜底的静态路由在后
     api = APIRouter(dependencies=[Depends(require_auth)])
     for r in (
-        health.api_router,
+        pages.api_router,
         mijia.router,
         mpd.router,
         notify.router,
+        metrics.router,
         asr.router,
         agent.router,
     ):

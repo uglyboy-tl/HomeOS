@@ -32,7 +32,7 @@ class MpdBusyError(MpdError):
 
 
 def _quote(arg: str) -> str:
-    """带空白或引号类字符的参数整段加引号；换行直接拒（它会变成第二条命令）。
+    r"""带空白或引号类字符的参数整段加引号；换行直接拒（它会变成第二条命令）。
 
     MPD 的分词器把 `'` 和 `"` 都当引号开头（未加引号的 `Dan Gibson's` 会被回
     `Invalid unquoted character`），`\` 则会被当转义吃掉，所以四个都要走加引号分支。

@@ -1,12 +1,13 @@
-"""助手接口 /api/agent/*：页面用 turn/stream/say/new，测试台用 ask/info/trace/bind/model。"""
+"""助手接口 /api/agent/*：页面用 turn/stream/say/new，ask 给程序，info/trace/bind/model 调试。"""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from .. import config
 from ..services import agent
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(config.ready("opencode.go_api_key"))])
 
 
 def install_error_handlers(app) -> None:
@@ -57,7 +58,9 @@ class ModelReq(BaseModel):
 
 @router.post("/api/agent/say")
 async def api_say(req: SayReq):
-    return await agent.say(req.mode, _text(req.text))
+    if not req.text.strip():
+        raise HTTPException(400, "内容是空的")
+    return await agent.say(req.mode, req.text)
 
 
 @router.get("/api/agent/turn")
@@ -116,10 +119,3 @@ async def api_bind(req: BindReq):
 @router.post("/api/agent/model")
 async def api_model(req: ModelReq):
     return await agent.set_model(req.mode, req.providerID, req.id, req.variant)
-
-
-def _text(raw: str) -> str:
-    text = raw.strip()
-    if not text:
-        raise HTTPException(400, "内容是空的")
-    return text

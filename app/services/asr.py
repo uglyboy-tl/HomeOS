@@ -1,9 +1,9 @@
 """Azure 实时识别（会话模式 WS）。只支持这一家：换供应商等于换协议。
 
-微软没公开裸 WS 文档（照 SDK 逆推），三个必须守住的事实：
+三个必须守住的事实（微软没公开裸 WS 文档，照 SDK 逆推）：
 - 一轮音频共用同一个 `X-RequestId`（每帧换 id，云端只回 turn.start）；
 - 音频帧 = 2 字节大端头长 + 头（含 `Path:audio`）+ 裸 PCM；
-- 文本帧 = 头 + 空行 + JSON，`speech.config` 先发，声明采样率。
+- 文本帧 = 头 + 空行 + JSON，`speech.config` 先发、声明采样率。
 """
 
 from __future__ import annotations
@@ -27,10 +27,6 @@ MAX_BYTES = MAX_SECONDS * SAMPLE_RATE * 2  # 16bit 单声道
 
 class AsrError(RuntimeError):
     """识别不可用或失败（没配置、上游报错、协议不符预期）。"""
-
-
-class NotConfigured(AsrError):
-    """没填 key/地址：这不是故障，是还没配。"""
 
 
 def _text_frame(path: str, payload: dict) -> str:
@@ -113,8 +109,6 @@ class Session:
         on_partial: Callable[[str], Awaitable[None]],
         rate: int = SAMPLE_RATE,
     ) -> None:
-        if not config.ASR_HOST or not config.ASR_KEY:
-            raise NotConfigured("语音识别没配置：HOMEOS_ASR_HOST / HOMEOS_ASR_KEY")
         self.on_partial = on_partial
         self.rate = rate
         self.request_id = uuid.uuid4().hex

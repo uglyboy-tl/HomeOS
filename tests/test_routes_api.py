@@ -9,8 +9,7 @@ from app.services import mpd, notify
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setattr(config, "TOKEN", "")
+def client() -> TestClient:
     return TestClient(app)
 
 
@@ -121,3 +120,17 @@ def test_ask_rejects_unknown_field(client):
 def test_ask_prompt_too_long_is_400(client):
     r = client.post("/api/agent/ask", json={"input": "x", "prompt": "x" * 2001})
     assert r.status_code == 400 and "prompt 太长" in r.text
+
+
+def test_agent_routes_need_model_key(client, monkeypatch):
+    """没有模型 key 时，agent 那组接口统一 503 并指到配置项。"""
+    monkeypatch.setattr(config, "OPENCODE_GO_KEY", "")
+    r = client.get("/api/agent/info")
+    assert r.status_code == 503
+    assert "opencode.go_api_key" in r.json()["detail"]
+
+
+def test_mpd_route_needs_host(client, monkeypatch):
+    monkeypatch.setattr(config, "MPD_HOST", "")
+    r = client.get("/api/mpd/state")
+    assert r.status_code == 503 and "mpd.host" in r.json()["detail"]

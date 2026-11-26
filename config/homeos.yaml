@@ -1,0 +1,29 @@
+# 外部服务接入信息。带值的三项是默认值，删掉或留空则用 app/config.py 的 DEFAULTS。
+# token 类可轮换凭据也可用环境变量覆盖：GOTIFY_TOKEN / AZURE_SPEECH_KEY
+
+gotify:
+  url: "" # 容器内服务名 http://gotify
+  token: "" # Gotify 后台 → Apps
+
+beszel:
+  url: ""
+  user: "" # 只读账号
+  password: ""
+
+mpd:
+  host: "" # 同 traefik 网络时可写容器名 mpd
+  port: 6600
+
+azure_asr:
+  endpoint: "eastasia.stt.speech.microsoft.com" # 区域域名，不带 wss://
+  api_key: ""
+  lang: "zh-CN" # 只认完整 locale，裸 zh 会 400
+
+opencode:
+  serve_password: "" # web ↔ opencode serve，每次容器启动重换
+  go_api_key: "" # 缺了 agent 接口全 503
+  exa_key: "" # 网页搜索
+
+# 对外令牌：其他程序调 /api/* 用它；留空则容器启动时自动生成
+server:
+  token: ""

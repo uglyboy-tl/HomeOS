@@ -1,7 +1,7 @@
 """米家：设备表（config/mijia.yaml）+ 读状态、写开关、播报。
 
-调用方在线程池里（routes 是 sync def），别改成 async。锁的边界：`_cache_lock` 只罩缓存字典，
-同一台设备用 `_device_lock` 串行（mijiaDevice 共用一条 requests 会话）。
+调用方在线程池里（routes 是 sync def），别改成 async；`_device_lock` 按 did 串行，
+因为 mijiaDevice 共用一条 requests 会话。
 """
 
 from __future__ import annotations
@@ -361,18 +361,19 @@ SAY_ACTION = "play-text"  # miot 里"念一段话"的动作名，各家音箱一
 SAY_MAX = 200  # 一次播报的文本上限（实测 280 字也接受，留余量）
 
 
-def say(text: str) -> dict:
-    """让播报音箱念一句；只回"已下发"，云端没有播放回执。"""
-    tts = _load_table()["tts"]
-    if tts is None:
-        raise MijiaError("没配播报音箱（config/mijia.yaml 顶层的 tts）")
+def say(text: str, did: str = "") -> dict:
+    """让播报音箱念一句；did 为空就用设备表里的 tts.did。云端没有播放回执。"""
+    if not did:
+        tts = _load_table()["tts"]
+        if tts is None:
+            raise MijiaError("没配播报音箱（config/mijia.yaml 顶层的 tts）")
+        did = str(tts["did"])
     said = (text or "").strip()[:SAY_MAX]
     _client()
-    did = tts["did"]
     with _device_lock(did):
         # 参数名必须是 `in`：动作走 /miotspec/action，放 `value` 会被回"参数个数不匹配"
         _dev(did).run_action(SAY_ACTION, **{"in": [said]})
-    return {"text": said}
+    return {"text": said, "did": did}
 
 
 def set_switch(sid: str, want: bool) -> dict:

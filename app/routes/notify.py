@@ -3,13 +3,14 @@
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from .. import config
 from ..services import notify
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(config.ready("gotify.url", "gotify.token"))])
 log = logging.getLogger("homeos.notify")
 
 
