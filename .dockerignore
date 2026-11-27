@@ -1,17 +1,16 @@
 .git
 .github
 .gitignore
+.agents
 .venv
 .devdata
-data
+.env
+.env.example
 __pycache__
 .pytest_cache
+.ruff_cache
+.playwright-cli
 docs
 tests
-.env.example
-opencode/opencode.env
-# 功能卷由 compose 挂载，镜像里只留空目录
+# 功能页由 compose 挂载，镜像里只留空目录
 web/pages/*
-.ruff_cache/
-.agents/
-.env

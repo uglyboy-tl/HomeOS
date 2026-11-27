@@ -1,61 +1,43 @@
-"""容器启动前的配置准备：空挂载目录补默认配置，生成令牌、轮换 opencode 密码。
+"""启动前的配置准备：空挂载目录补默认配置，容器模式另外生成对外令牌。
 
-由 docker/entrypoint.sh 调用（只有容器模式跑）。按固定顺序打印三行给 shell 抓取：
-opencode 密码、模型 key、搜索 key —— 后两个 opencode 只认环境变量。
+entrypoint.sh 与 scripts/dev.sh 共用，只用标准库。
+只补「人改了会生效」的文件——镜像里烤死的策略文件不在此列。
 """
 
-import pathlib
-import re
 import secrets
 import shutil
 import sys
+from pathlib import Path
 
-import yaml
-
-
-def _replace_value(text: str, section: str, key: str, value: str) -> str:
-    """行级替换：只改目标键那一行，保住文件里的注释与排版。"""
-    lines = text.splitlines()
-    head = next((i for i, line in enumerate(lines) if line.strip() == f"{section}:"), None)
-    if head is None:
-        return f'{text.rstrip()}\n{section}:\n  {key}: "{value}"\n'
-    end = next(
-        (i for i in range(head + 1, len(lines)) if lines[i] and not lines[i][0].isspace()),
-        len(lines),
-    )
-    for i in range(head + 1, end):
-        if re.match(rf"\s*{key}\s*:", lines[i]):
-            # 只换值，保留行尾注释
-            lines[i] = re.sub(
-                r'(:\s*)("[^"]*"|\S*)(\s+#.*)?$',
-                lambda m: f'{m.group(1)}"{value}"{m.group(3) or ""}',
-                lines[i],
-            )
-            break
-    else:
-        lines.insert(head + 1, f'  {key}: "{value}"')
-    return "\n".join(lines) + "\n"
+# 都进挂载目录，改完（重启或「新对话」后）真生效：服务、设备表、模式表、pi 的模型与设置
+FILES = (
+    "homeos.yaml",
+    "mijia.yaml",
+    "agents.yaml",
+    "agents.md",
+    "pi-models.json",
+    "pi-settings.json",
+)
 
 
-def main() -> None:
-    config_dir, defaults = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+def main(argv: list[str]) -> None:
+    dirs = [Path(a) for a in argv if not a.startswith("--")]
+    unknown = [a for a in argv if a.startswith("--") and a != "--token"]
+    if len(dirs) != 2 or unknown:
+        sys.exit("用法：prepare.py [--token] <config_dir> <defaults_dir>")
+    config_dir, defaults = dirs
     config_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("homeos.yaml", "mijia.yaml"):
+    for name in FILES:
         if not (config_dir / name).exists() and (defaults / name).exists():
             shutil.copy(defaults / name, config_dir / name)
 
-    path = config_dir / "homeos.yaml"
-    text = path.read_text(encoding="utf-8")
-    doc = yaml.safe_load(text) or {}
-    if not str((doc.get("server") or {}).get("token") or "").strip():
-        text = _replace_value(text, "server", "token", secrets.token_hex(24))
-    password = secrets.token_hex(16)  # 每次启动都换，不接受外部干预
-    path.write_text(_replace_value(text, "opencode", "serve_password", password), encoding="utf-8")
-    path.chmod(0o600)  # 里面有令牌与口令
-    opencode = doc.get("opencode") or {}
-    for value in (password, opencode.get("go_api_key") or "", opencode.get("exa_key") or ""):
-        print(value)
+    if "--token" not in argv:
+        return
+    token = config_dir / "server.token"
+    if not token.exists() or not token.read_text(encoding="utf-8").strip():
+        token.write_text(secrets.token_hex(24), encoding="utf-8")
+    token.chmod(0o600)  # 它是钥匙，同目录其他文件是 0644
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

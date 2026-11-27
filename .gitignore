@@ -1,10 +1,15 @@
+# Python 与工具缓存
 __pycache__/
 .venv/
-.devdata/
-data/
-.playwright-cli/
 .pytest_cache/
-opencode/opencode.env
-# 本地/部署的密钥，绝不进 git
-.env
 .ruff_cache/
+
+# 本机开发的数据与密钥
+.devdata/
+.env
+
+# dev.sh 从 config/ 复制生成的（镜像里那份是构建期烤进去的）
+web/.cc-safety-net/
+
+# 浏览器自动化产物
+.playwright-cli/

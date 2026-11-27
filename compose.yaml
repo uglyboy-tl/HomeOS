@@ -3,7 +3,7 @@ services:
     image: ghcr.nju.edu.cn/uglyboy-tl/homeos:latest
     container_name: homeos
     restart: unless-stopped
-    # 不发布宿主端口：HTTPS 由 Traefik 终止，设备上 getUserMedia 才有 secure context
+    # 不发布宿主端口：HTTPS 由 Traefik 终止，设备上的 getUserMedia 需要 secure context
     labels:
       - traefik.enable=true
       - traefik.http.routers.homeos.rule=Host(`homeos.uglyboy.cn`)
@@ -11,32 +11,36 @@ services:
       - traefik.docker.network=traefik
     networks:
       - traefik
-    # compose 的 .env 默认只做插值，不注入容器，所以要显式读
+    # compose 的 .env 只做插值，不注入容器
     env_file:
       - .env
     volumes:
-      # 功能页：agent 唯一能写的地方，备份它就是备份全部用户内容
-      - ./pages:/app/web/pages
-      # 必挂：空目录会从镜像里的 /app/defaults 复制一份默认配置
-      - ./config:/app/config
-      # 米家登录态：库写死 ~/.config/mijia-api，不认 XDG
-      - ${XDG_CONFIG_HOME:-${HOME}/.config}/mijia-api:/data/.config/mijia-api
-    # 运行时状态（opencode session、米家缓存）不持久化，重启即重建
+      - ./pages:/app/web/pages # 用户内容：用绑定，方便备份与手改
+      - ./config:/app/config # 人的配置：服务、设备表、模式表、pi 模型与设置
+      - homeos-sessions:/data/sessions # 会话落命名卷，跨 down/up 与镜像升级都在
+      - ${XDG_CONFIG_HOME:-${HOME}/.config}/mijia-api:/data/.config/mijia-api # 登录态要人扫码，放卷外才换得动
+      # 想用自己的 web/（含 .pi/ 项目设置、自定义静态资源）时取消注释，建议只读。
+      # 注意：它会盖住镜像里的 .cc-safety-net/，所以宿主 web/ 要自带 policy.json：
+      # - ${HOMEOS_WEB:-../web}:/app/web:ro
+    # size 是上限不是预留：写满报 ENOSPC，不会 OOM
     tmpfs:
-      - /tmp:size=512m
-      # 1777 必须显式：有嵌套 bind 时 Docker 把 tmpfs 根建成 root:0755，uid 1000 就写不了
-      - /data:size=1g,mode=1777
+      - /tmp:size=512m # pi 工具的临时文件与大输出
+      # 1777 必须显式：有嵌套挂载时 tmpfs 根会被建成 root:0755
+      - /data:size=128m,mode=1777 # pi 运行时（$HOME）+ 米家缓存，实测 <1MB，留余量
     read_only: true
     security_opt:
       - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/ready"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+    # 健康检查在镜像里（HEALTHCHECK），别在这里写第二份
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   # 由 traefik 栈创建：docker network create traefik
   traefik:
     external: true
+
+volumes:
+  homeos-sessions:
