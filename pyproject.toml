@@ -15,11 +15,24 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.9"]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=6",
+  "pytest-randomly>=3.16",  # 顺序随机：失败时按日志里的 seed 用 --randomly-seed= 复跑
+  "pytest-timeout>=2.3",
+  "ruff>=0.9",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "-ra -m 'not manual' --strict-markers --strict-config --timeout=60"
+filterwarnings = [
+  "error",
+  # starlette 1.10 的 testclient 提示改装 httpx2：上游的事，等它换完再收
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+]
+markers = ["manual: 需要真模型或真设备，CI 不跑"]
 
 [tool.ruff]
 line-length = 100

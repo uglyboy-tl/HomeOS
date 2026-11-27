@@ -13,3 +13,8 @@ web/.cc-safety-net/
 
 # 浏览器自动化产物
 .playwright-cli/
+
+# 覆盖率产物
+.coverage
+coverage.xml
+htmlcov/

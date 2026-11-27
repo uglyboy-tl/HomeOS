@@ -31,7 +31,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pytest -q
+      - run: uv run pytest -q --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=95
 
   # 两个架构原生编译（公开仓库的 arm64 runner 免费），比单机 QEMU 快一个数量级。
   # 各自按 digest 推送，最后由 merge 合成一个多架构 tag。
