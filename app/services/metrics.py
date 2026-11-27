@@ -1,13 +1,13 @@
-"""NAS 本机指标：从 Beszel 取最新一份 1 分钟采样，压成页面要的几个数。
+"""NAS 本机指标：取 Beszel 最新一份 1 分钟采样，压成页面要的几个数。
 
-只读账号登录一次，会话 token 留在进程内；401 说明过期，重登一次。
-"""
+只读账号登录一次，token 留在进程内；401 说明过期，重登一次。"""
 
 import logging
 
 import httpx
 
 from .. import config
+from ..lib import health
 
 log = logging.getLogger("homeos.metrics")
 
@@ -64,3 +64,15 @@ def snapshot() -> dict:
         "net": {"iface": iface, "rx": rx, "tx": tx},
         "uptime": (systems[0].get("info") or {}).get("u") if systems else None,
     }
+
+
+def check_config() -> None:
+    config.require("beszel.url", "beszel.user", "beszel.password")
+
+
+def probe() -> None:
+    """探一次完整读取：登录 + 取一份采样。"""
+    snapshot()
+
+
+health.register("metrics", check=check_config, probe=probe)

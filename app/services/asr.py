@@ -1,10 +1,6 @@
-"""Azure 实时识别（会话模式 WS）。只支持这一家：换供应商等于换协议。
+"""Azure 实时识别（会话模式 WS）；只支持这一家：换供应商等于换协议。
 
-三个必须守住的事实（微软没公开裸 WS 文档，照 SDK 逆推）：
-- 一轮音频共用同一个 `X-RequestId`（每帧换 id，云端只回 turn.start）；
-- 音频帧 = 2 字节大端头长 + 头（含 `Path:audio`）+ 裸 PCM；
-- 文本帧 = 头 + 空行 + JSON，`speech.config` 先发、声明采样率。
-"""
+一轮音频必须共用同一个 `X-RequestId`（每帧换 id，云端只回 turn.start）；帧格式见两个构造函数。"""
 
 from __future__ import annotations
 
@@ -18,6 +14,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from .. import config
+from ..lib import health
 
 # 语音识别按音频时长计费，这里挡一下异常的长时间流（10 分钟）
 MAX_SECONDS = 600
@@ -177,3 +174,11 @@ class Session:
         if self._error:
             raise AsrError(self._error)
         return self._final
+
+
+def check_config() -> None:
+    config.require("azure_asr.endpoint", "azure_asr.api_key")
+
+
+# 只有建 WS 才探得到真实可用性：失败在帧里报，所以没有 probe
+health.register("asr", check=check_config)

@@ -1,113 +1,74 @@
-"""MPD（行协议，6600）：读状态、控制播放、同步曲库。
-连上先收 `OK MPD <ver>`，之后一行一条命令，回 `key: value` 行，以 `OK` 或 `ACK` 结束。
-全部 sync def：局域网往返毫秒级，但别占事件循环。"""
+"""MPD：播放状态与控制、曲库索引。
 
+行协议交给 python-mpd2（转义/ACK/命令列表）；这里只做连接、异常翻译、状态整形。"""
+
+import contextlib
 import logging
-import socket
 import threading
 import time
-from contextlib import suppress
+
+import mpd as client_lib
 
 from .. import config
+from ..lib import health
 
 log = logging.getLogger("homeos.mpd")
 
-DEVICES = ("mpd",)  # 现在只有这一路输出；将来 DLNA/AirPlay 就是这里加一项
+NO_EXIST = 50  # MPD 的 ACK 错误码：找不到列表/曲目/目录
+
+_SYNC_LOCK = threading.Lock()
 
 
 class MpdError(Exception):
-    """连不上 MPD，或它拒绝了命令。"""
+    """MPD 不可用或命令失败。"""
 
 
 class MpdNotFound(MpdError):
-    """要的播放列表 / 目录不存在。"""
-
-
-class MpdValueError(MpdError):
-    """参数不合法（换行会变成第二条命令，直接拒）。"""
+    """列表、曲目或目录不存在。"""
 
 
 class MpdBusyError(MpdError):
-    """同一时刻只允许一次 sync（交错 playlistclear/add 会把列表写坏）。"""
+    """同一时刻只允许一次曲库同步。"""
 
 
-def _quote(arg: str) -> str:
-    r"""带空白或引号类字符的参数整段加引号；换行直接拒（它会变成第二条命令）。
-
-    MPD 的分词器把 `'` 和 `"` 都当引号开头（未加引号的 `Dan Gibson's` 会被回
-    `Invalid unquoted character`），`\` 则会被当转义吃掉，所以四个都要走加引号分支。
-    """
-    if any(c in arg for c in "\r\n"):
-        raise MpdValueError("参数里不能有换行")
-    if arg and not any(c in arg for c in " \"'\\\t"):
-        return arg
-    return '"' + arg.replace("\\", "\\\\").replace('"', '\\"') + '"'
+class MpdConflict(MpdError):
+    """当前状态不允许这个操作（比如停着的时候切下一首）。"""
 
 
-class _Conn:
-    def __init__(self) -> None:
-        try:
-            self.sock = socket.create_connection(
-                (config.MPD_HOST, config.MPD_PORT), config.MPD_CONNECT_TIMEOUT
-            )
-        except OSError as e:
-            raise MpdError(f"连不上 MPD（{config.MPD_HOST}:{config.MPD_PORT}）：{e}") from e
-        self.sock.settimeout(config.MPD_TIMEOUT)
-        try:
-            self.file = self.sock.makefile("rwb")
-            greeting = self.file.readline().decode("utf-8", "replace").strip()
-        except OSError as e:
-            self.close()
-            raise MpdError(f"连上了但握手失败：{e}") from e
-        if not greeting.startswith("OK MPD"):
-            self.close()
-            raise MpdError(f"{config.MPD_HOST} 不是 MPD：{greeting[:40]}")
-
-    def __enter__(self) -> "_Conn":
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self.close()
-
-    def close(self) -> None:
-        file = getattr(self, "file", None)
-        for closer in (file.close if file else None, self.sock.close):
-            if closer:
-                with suppress(OSError):
-                    closer()
-
-    def cmd(self, *args: object) -> list[tuple[str, str]]:
-        """发一条命令，回 [(key, value), ...]；重复的键会在列表里出现多次。"""
-        line = " ".join(_quote(str(a)) for a in args)
-        try:
-            self.file.write((line + "\n").encode())
-            self.file.flush()
-            rows: list[tuple[str, str]] = []
-            while True:
-                raw = self.file.readline()
-                if not raw:
-                    raise MpdError("MPD 断开了连接")
-                text = raw.decode("utf-8", "replace").rstrip("\n")
-                if text == "OK":
-                    return rows
-                if text.startswith("ACK"):
-                    if "No such" in text or "not found" in text:
-                        raise MpdNotFound(text)
-                    raise MpdError(text)
-                key, _, value = text.partition(": ")
-                rows.append((key, value))
-        except OSError as e:
-            raise MpdError(f"和 MPD 通信失败：{e}") from e
+@contextlib.contextmanager
+def _conn():
+    client = client_lib.MPDClient()
+    client.timeout = config.MPD_TIMEOUT
+    try:
+        client.connect(config.MPD_HOST, config.MPD_PORT, config.MPD_CONNECT_TIMEOUT)
+    except (client_lib.MPDError, OSError) as e:
+        raise MpdError(f"连不上 MPD（{config.MPD_HOST}:{config.MPD_PORT}）：{e}") from e
+    try:
+        yield client
+    except client_lib.CommandError as e:
+        raise _translate(e) from e
+    except (client_lib.MPDError, OSError) as e:
+        raise MpdError(f"和 MPD 通信失败：{e}") from e
+    finally:
+        with contextlib.suppress(client_lib.MPDError, OSError):
+            client.disconnect()
 
 
-def _status(c: _Conn) -> dict:
-    return dict(c.cmd("status"))
+def _translate(error: client_lib.CommandError) -> MpdError:
+    message = error.msg or str(error)
+    errno = getattr(error.errno, "value", error.errno)
+    if errno == NO_EXIST:
+        return MpdNotFound(message)
+    # 停着的时候切歌、没有上一首：这是调用时机的问题，不是上游坏了
+    if message.startswith(("Not playing", "No next", "No previous")):
+        return MpdConflict(message)
+    return MpdError(message)
 
 
 def _int(value: str | None, default: int = 0) -> int:
     try:
         return int(value) if value is not None else default
-    except ValueError:
+    except (TypeError, ValueError):
         return default
 
 
@@ -119,125 +80,165 @@ def _float(value: object, default: float = 0.0) -> float:
 
 
 def state() -> dict:
-    with _Conn() as c:
-        return _read_state(c)
+    with _conn() as client:
+        return _read_state(client)
 
 
-def _read_state(c: _Conn) -> dict:
-    st = _status(c)
-    song = dict(c.cmd("currentsong"))
-    volume = _int(st.get("volume"), -1)  # 没有音量控制的输出会回 -1，对外报 null
-    return {
-        "state": st.get("state", "stop"),
-        "volume": volume if volume >= 0 else None,
-        "repeat": st.get("repeat") == "1",
-        "random": st.get("random") == "1",
-        "crossfade": _int(st.get("xfade")),
-        "updating": "updating_db" in st,
-        "song": {
-            "file": song.get("file"),
-            "title": song.get("Title") or song.get("Name"),
-            "artist": song.get("Artist"),
-            # 播放位置在 status 里；currentsong 的 elapsed 恒为 0
-            "elapsed": _float(st.get("elapsed")),
-            "duration": _float(st.get("duration") or song.get("duration")),
-        }
-        if song.get("file")
-        else None,
-        "playlist": {"length": _int(st.get("playlistlength"))},
-    }
+def playback(want: str) -> dict:
+    """`playing` / `paused` / `stopped`：声明要什么，不是要执行哪个动作。"""
+    with _conn() as client:
+        if want == "playing":
+            client.play()
+        elif want == "paused":
+            client.pause(1)
+        else:
+            client.stop()
+        return _read_state(client)
 
 
-def _play(c: _Conn, fields: dict) -> None:
-    if fields.get("playlist"):
-        c.cmd("clear")  # load 是追加，不清空的话每晚多叠一份
-        c.cmd("load", fields["playlist"])
-    if fields.get("random") is not None:
-        c.cmd("random", "1" if fields["random"] else "0")
-    if fields.get("repeat") is not None:
-        c.cmd("repeat", "1" if fields["repeat"] else "0")
-    if fields.get("crossfade") is not None:
-        c.cmd("crossfade", fields["crossfade"])
-    if fields.get("volume") is not None:
-        c.cmd("setvol", fields["volume"])
-    c.cmd("play")
+def settings(
+    *,
+    volume: int | None = None,
+    random: bool | None = None,
+    repeat: bool | None = None,
+    crossfade: int | None = None,
+) -> dict:
+    """改播放器参数；一次改多个也走命令列表，不会改一半。"""
+    commands = []
+    if volume is not None:
+        commands.append(("setvol", volume))
+    if random is not None:
+        commands.append(("random", 1 if random else 0))
+    if repeat is not None:
+        commands.append(("repeat", 1 if repeat else 0))
+    if crossfade is not None:
+        commands.append(("crossfade", crossfade))
+    with _conn() as client:
+        if commands:
+            client.command_list_ok_begin()
+            for name, value in commands:
+                getattr(client, name)(value)
+            client.command_list_end()
+        return _read_state(client)
 
 
-ACTIONS = {
-    "play": _play,
-    "pause": lambda c, f: c.cmd("pause", "1" if f.get("on", True) else "0"),
-    "stop": lambda c, f: c.cmd("stop"),
-    "volume": lambda c, f: c.cmd("setvol", f["volume"]),
-    "next": lambda c, f: c.cmd("next"),
-    "prev": lambda c, f: c.cmd("previous"),
-}
+def queue_next() -> dict:
+    with _conn() as client:
+        client.next()
+        return _read_state(client)
 
 
-def control(action: str, **fields: object) -> dict:
-    """执行一个动作，返回动作之后的状态（写接口必须读回）。"""
-    if action not in ACTIONS:
-        raise MpdValueError(f"未知动作：{action}")
-    for value in fields.values():
-        if isinstance(value, str):
-            _quote(value)  # 只做校验：坏参数在连 MPD 之前就拒
-    with _Conn() as c:
-        ACTIONS[action](c, fields)
-        return _read_state(c)
+def queue_prev() -> dict:
+    with _conn() as client:
+        client.previous()
+        return _read_state(client)
 
 
-def _wait_update(c: _Conn, deadline: float) -> None:
-    while "updating_db" in _status(c):
+def playlist(name: str) -> dict:
+    """清空队列 → 载入列表 → 开始播。三步在一个命令列表里，失败不会留下空队列。"""
+    with _conn() as client:
+        client.command_list_ok_begin()
+        client.clear()
+        client.load(name)
+        client.play()
+        client.command_list_end()
+        return _read_state(client)
+
+
+def library_update() -> dict:
+    """让 MPD 重新扫描曲库，等索引建完。"""
+    with _lock():
+        deadline = time.monotonic() + config.MPD_SYNC_TIMEOUT
+        with _conn() as client:
+            client.update()
+            _wait_update(client, deadline)
+    return {"updated": True}
+
+
+def library_rebuild() -> dict:
+    """按一级目录重建同名播放列表（逐项容错，会打断正在播的那份）。"""
+    with _lock():
+        deadline = time.monotonic() + config.MPD_SYNC_TIMEOUT
+        with _conn() as client:
+            client.update()
+            _wait_update(client, deadline)
+            existing = {row["playlist"] for row in client.listplaylists() if "playlist" in row}
+            dirs = [row["directory"] for row in client.listfiles() if "directory" in row]
+            tracks, skipped = 0, []
+            for directory in dirs:
+                if time.monotonic() > deadline:
+                    raise MpdError(f"重建列表超过 {config.MPD_SYNC_TIMEOUT:g}s（已建 {tracks} 首）")
+                name = directory.rstrip("/")
+                try:
+                    if name in existing:
+                        client.playlistclear(name)
+                    files = [row["file"] for row in client.listfiles(directory) if "file" in row]
+                    for filename in files:
+                        try:
+                            client.playlistadd(name, f"{directory}/{filename}")
+                            tracks += 1
+                        except client_lib.CommandError as e:  # 单曲坏了只跳过
+                            skipped.append({"item": f"{directory}/{filename}", "reason": _it(e)})
+                except client_lib.CommandError as e:
+                    skipped.append({"item": directory, "reason": _it(e)})
+    return {"updated": True, "dirs": len(dirs), "tracks": tracks, "skipped": skipped}
+
+
+def _it(error: client_lib.CommandError) -> str:
+    return str(error.msg or error)[:80]
+
+
+@contextlib.contextmanager
+def _lock():
+    if not _SYNC_LOCK.acquire(blocking=False):
+        raise MpdBusyError("已有一次曲库同步在跑")
+    try:
+        yield
+    finally:
+        _SYNC_LOCK.release()
+
+
+def _wait_update(client: client_lib.MPDClient, deadline: float) -> None:
+    while "updating_db" in client.status():
         if time.monotonic() > deadline:
             raise MpdError(f"索引超过 {config.MPD_SYNC_TIMEOUT:g}s 还没完")
         time.sleep(0.5)
 
 
-def _dirs_and_files(c: _Conn, parent: str = "") -> tuple[list[str], list[str]]:
-    """列一层目录与文件；MPD 的返回是扁平的 key/value，目录在前。"""
-    rows = c.cmd("listfiles", parent) if parent else c.cmd("listfiles")
-    dirs = [v for k, v in rows if k == "directory"]
-    files = [v for k, v in rows if k == "file"]
-    return dirs, files
+def _read_state(client: client_lib.MPDClient) -> dict:
+    status = client.status()
+    song = client.currentsong()
+    volume = _int(status.get("volume"), -1)  # 没有音量控制的输出回 -1，对外报 null
+    return {
+        "state": status.get("state", "stop"),
+        "volume": volume if volume >= 0 else None,
+        "repeat": status.get("repeat") == "1",
+        "random": status.get("random") == "1",
+        "crossfade": _int(status.get("xfade")),
+        "updating": "updating_db" in status,
+        "song": {
+            "file": song.get("file"),
+            # python-mpd2 把 currentsong 的键全转小写
+            "title": song.get("title") or song.get("name"),
+            "artist": song.get("artist"),
+            # 播放位置在 status 里；currentsong 的 elapsed 恒为 0
+            "elapsed": _float(status.get("elapsed")),
+            "duration": _float(status.get("duration") or song.get("duration")),
+        }
+        if song.get("file")
+        else None,
+        "playlist": {"length": _int(status.get("playlistlength"))},
+    }
 
 
-_SYNC_LOCK = threading.Lock()
+def check_config() -> None:
+    """静态检查：主机配了没。"""
+    config.require("mpd.host")
 
 
-def sync(rebuild: bool = False) -> dict:
-    """update 索引；`rebuild` 时按一级目录重建同名播放列表（逐项容错，会打断正在播的那份）。"""
-    if not _SYNC_LOCK.acquire(blocking=False):
-        raise MpdBusyError("已有一次同步在跑")
-    try:
-        return _sync(rebuild)
-    finally:
-        _SYNC_LOCK.release()
+def probe() -> None:
+    """运行期探测：真的去问一句状态。"""
+    state()
 
 
-def _sync(rebuild: bool) -> dict:
-    deadline = time.monotonic() + config.MPD_SYNC_TIMEOUT
-    with _Conn() as c:
-        c.cmd("update")
-        _wait_update(c, deadline)
-        if not rebuild:
-            return {"updated": True, "dirs": 0, "tracks": 0, "skipped": []}
-
-        existing = {v for k, v in c.cmd("listplaylists") if k == "playlist"}
-        dirs, _ = _dirs_and_files(c)
-        tracks, skipped = 0, []
-        for directory in dirs:
-            if time.monotonic() > deadline:
-                raise MpdError(f"重建列表超过 {config.MPD_SYNC_TIMEOUT:g}s（已建 {tracks} 首）")
-            name = directory.rstrip("/")
-            try:
-                if name in existing:
-                    c.cmd("playlistclear", name)
-                _, files = _dirs_and_files(c, directory)
-                for filename in files:
-                    try:
-                        c.cmd("playlistadd", name, f"{directory}/{filename}")
-                        tracks += 1
-                    except MpdError as e:  # 单曲坏了只跳过，别中断整轮
-                        skipped.append({"item": f"{directory}/{filename}", "reason": str(e)[:80]})
-            except MpdError as e:
-                skipped.append({"item": directory, "reason": str(e)[:80]})
-        return {"updated": True, "dirs": len(dirs), "tracks": tracks, "skipped": skipped}
+health.register("mpd", check=check_config, probe=probe)

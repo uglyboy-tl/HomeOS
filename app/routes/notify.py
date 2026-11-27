@@ -1,16 +1,16 @@
-"""通知接口：一条消息 + 走哪些通道（推 Gotify / 音箱播报）。"""
+"""通知接口：一条消息推 Gotify。"""
 
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict
 
-from .. import config
+from ..lib import health
+from ..lib.errors import ApiError
 from ..services import notify
 
-router = APIRouter(dependencies=[Depends(config.ready("gotify.url", "gotify.token"))])
+router = APIRouter(tags=["notify"], dependencies=health.deps("notify"))
 log = logging.getLogger("homeos.notify")
 
 
@@ -20,26 +20,19 @@ class NotifyReq(BaseModel):
     text: str
     title: str = ""
     level: Literal["info", "warn", "error"] = "info"
-    channels: list[Literal["gotify", "speak"]] = Field(default_factory=lambda: ["gotify"])
 
 
 @router.post("/api/notify")
-def api_notify(req: NotifyReq):
-    """默认只推 Gotify；要出声显式加 "speak"。部分通道失败仍 200，全挂才 503。"""
+def api_notify(req: NotifyReq) -> dict:
+    """推一条通知；返回 Gotify 的消息 id。"""
     text = req.text.strip()
     if not text:
-        raise HTTPException(400, "text 是空的")
-    if not req.channels:
-        raise HTTPException(400, "channels 不能为空")
-    results = notify.send(text, req.title, req.level, tuple(dict.fromkeys(req.channels)))
-    ok = any(r["ok"] for r in results.values())
-    log.info(
-        "notify level=%s channels=%s chars=%d ok=%s",
-        req.level,
-        ",".join(req.channels),
-        len(text),
-        ok,
-    )
-    if not ok:
-        return JSONResponse({"ok": False, "results": results}, status_code=503)
-    return {"ok": True, "results": results}
+        raise ApiError(400, "bad_input", "text 是空的")
+    try:
+        out = notify.push(text, req.title, req.level)
+    except notify.NotifyError as e:
+        log.warning("通知推送失败：%s", e)
+        raise health.failing("notify", e) from e
+    health.note("notify", True)
+    log.info("notify level=%s chars=%d id=%s", req.level, len(text), out["id"])
+    return out

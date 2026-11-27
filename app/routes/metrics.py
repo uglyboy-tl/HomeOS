@@ -2,21 +2,21 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 
-from .. import config
+from ..lib import health
 from ..services import metrics
 
-router = APIRouter(
-    dependencies=[Depends(config.ready("beszel.url", "beszel.user", "beszel.password"))]
-)
+router = APIRouter(tags=["metrics"], dependencies=health.deps("metrics"))
 log = logging.getLogger("homeos.metrics")
 
 
 @router.get("/api/metrics")
-def api_metrics():
+def api_metrics() -> dict:
     try:
-        return {"ok": True, "metrics": metrics.snapshot()}
+        out = metrics.snapshot()
     except metrics.BeszelError as e:
         log.warning("metrics 失败：%s", e)
-        raise HTTPException(503, str(e)) from e
+        raise health.failing("metrics", e) from e
+    health.note("metrics", True)
+    return out

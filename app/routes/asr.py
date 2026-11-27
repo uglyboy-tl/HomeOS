@@ -1,4 +1,4 @@
-"""WS `/api/asr/stream`：二进制帧上行转 Azure，`{"partial"}` 推回去；`end` 收尾后回 `{"text"}`。"""
+"""WS `/api/asr/stream`：二进制帧上行转 Azure，回 `partial`/`final`/`error` 三类帧。"""
 
 import logging
 
@@ -9,13 +9,13 @@ from ..services import asr
 
 log = logging.getLogger("homeos.asr")
 
-router = APIRouter(dependencies=[Depends(sockets.ready("azure_asr.endpoint", "azure_asr.api_key"))])
+router = APIRouter(tags=["asr"], dependencies=[Depends(sockets.ready("asr"))])
 
 
 @router.websocket("/api/asr/stream")
 async def api_stream(ws: WebSocket):
     async def partial(text: str) -> None:
-        await sockets.send(ws, {"partial": text})
+        await sockets.send(ws, {"type": "partial", "text": text})
 
     sent = 0
     try:
@@ -25,19 +25,21 @@ async def api_stream(ws: WebSocket):
                 if message["type"] == "websocket.disconnect":
                     break
                 if message.get("text") == "end":
-                    await sockets.send(ws, {"text": await session.finish() or ""})
+                    text = await session.finish() or ""
+                    await sockets.send(ws, {"type": "final", "text": text})
                     return
                 pcm = message.get("bytes")
                 if not pcm:
                     continue
                 sent += len(pcm)
                 if sent > asr.MAX_BYTES:
-                    await sockets.send(ws, {"error": "说得太长了，分几次说吧"})
+                    too_long = {"type": "error", "code": "too_long", "message": "说得太长了"}
+                    await sockets.send(ws, too_long)
                     return
                 await session.send(pcm)
     except asr.AsrError as e:  # 必须排在 GONE 前：AsrError 也是 RuntimeError
         log.warning("语音识别失败：%s", e)
-        await sockets.send(ws, {"error": str(e)})
+        await sockets.send(ws, {"type": "error", "code": "asr_failed", "message": str(e)})
     except sockets.GONE:
         pass
     finally:

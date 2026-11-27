@@ -1,8 +1,6 @@
-"""米家：设备表（config/mijia.yaml）+ 读状态、写开关、播报。
+"""米家：设备表（config/mijia.yaml）+ 读值、写开关、播报。
 
-调用方在线程池里（routes 是 sync def），别改成 async；`_device_lock` 按 did 串行，
-因为 mijiaDevice 共用一条 requests 会话。
-"""
+调用方在线程池里（routes 是 sync def），别改成 async；`_device_lock` 按 did 串行。"""
 
 from __future__ import annotations
 
@@ -18,6 +16,7 @@ from pathlib import Path
 import yaml
 
 from .. import config
+from ..lib import health
 
 try:
     from mijiaAPI import mijiaAPI, mijiaDevice
@@ -50,12 +49,8 @@ class MijiaError(RuntimeError):
     """米家这一层不可用：没登录、装不上 mijiaAPI、设备表写错、云接口一直失败。"""
 
 
-class UnknownSwitch(LookupError):
-    """请求里给的开关 id 不在设备表里。"""
-
-
-class UnknownRoom(LookupError):
-    """请求里的房间不在设备表里。"""
+class UnknownDevice(LookupError):
+    """请求里给的设备 id 不在设备表里。"""
 
 
 # 顶层 `tts` 指播报音箱；没有 kind 的是开关，th/smoke 是传感器
@@ -153,7 +148,7 @@ def _load_table() -> dict:
     global _table_cache
     path = Path(config.MIJIA_CONFIG)
     try:
-        mtime = path.stat().st_mtime
+        mtime = path.stat().st_mtime_ns
     except OSError as e:
         raise TableError(f"读不到设备表 {path}：{e}") from e
     if _table_cache and _table_cache[0] == mtime:
@@ -325,28 +320,28 @@ def devices() -> dict:
     return {"rooms": rooms, "devices": items}
 
 
-def read_state(room: str | None = None) -> dict:
-    """按设备 id 给原始值（不含显示格式）。`room` 只读一间；同房间并行读，失败只标自己。"""
+def values(ids: list[str] | None = None) -> dict:
+    """按设备 id 给原始值（不含显示格式）；ids 为空就全读。单台失败只标它自己。"""
     _client()  # 没登录就在这一行失败，别等到每个设备各失败一次
-    rooms = _load_table()["rooms"]
-    if room is not None:
-        rooms = [r for r in rooms if r["id"] == room]
-        if not rooms:
-            raise UnknownRoom(f"未知房间：{room}")
+    table = _load_table()
+    jobs = [(sw, _cached_switch) for sw in table["switches"].values()]
+    jobs += [(sensor, _cached_sensor) for sensor in table["sensors"].values()]
+    if ids is not None:
+        wanted = set(ids)
+        known = {item["id"] for item, _ in jobs}
+        unknown = sorted(wanted - known)
+        if unknown:
+            raise UnknownDevice(f"未知设备：{'、'.join(unknown)}")
+        jobs = [(item, fn) for item, fn in jobs if item["id"] in wanted]
 
-    jobs = []
-    for one in rooms:
-        jobs += [(sw, _cached_switch) for sw in one["switches"]]
-        jobs += [(sensor, _cached_sensor) for sensor in one["sensors"]]
-
-    values = {}
+    found = {}
     if jobs:
         with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
             futures = {pool.submit(_read_one, fn, item): item for item, fn in jobs}
             for future in as_completed(futures):
-                values[futures[future]["id"]] = future.result()
+                found[futures[future]["id"]] = future.result()
     _save_disk()
-    return {"ts": int(time.time()), "values": values}
+    return {"ts": int(time.time()), "values": found}
 
 
 def _read_one(fn: Callable[[dict], dict], item: dict) -> dict:
@@ -357,42 +352,64 @@ def _read_one(fn: Callable[[dict], dict], item: dict) -> dict:
         return {"error": str(e)[:80]}
 
 
-SAY_ACTION = "play-text"  # miot 里"念一段话"的动作名，各家音箱一致
-SAY_MAX = 200  # 一次播报的文本上限（实测 280 字也接受，留余量）
+SAY_ACTION = "play-text"  # miot 里“念一段话”的动作名，各家音箱一致
 
 
-def say(text: str, did: str = "") -> dict:
-    """让播报音箱念一句；did 为空就用设备表里的 tts.did。云端没有播放回执。"""
+def speak(text: str, device: str = "") -> dict:
+    """把已经处理好的文本推给喇叭；device 为空就用设备表里的 tts.did。云端没有播放回执。"""
+    did = device
     if not did:
         tts = _load_table()["tts"]
         if tts is None:
-            raise MijiaError("没配播报音箱（config/mijia.yaml 顶层的 tts）")
+            raise config.NotConfigured("没配播报喇叭：填 config/mijia.yaml 顶层的 tts")
         did = str(tts["did"])
-    said = (text or "").strip()[:SAY_MAX]
     _client()
     with _device_lock(did):
-        # 参数名必须是 `in`：动作走 /miotspec/action，放 `value` 会被回"参数个数不匹配"
-        _dev(did).run_action(SAY_ACTION, **{"in": [said]})
-    return {"text": said, "did": did}
+        # 参数名必须是 `in`：动作走 /miotspec/action，放 `value` 会被回“参数个数不匹配”
+        _dev(did).run_action(SAY_ACTION, **{"in": [text]})
+    return {"text": text, "did": did}
 
 
-def set_switch(sid: str, want: bool) -> dict:
+def set_power(sid: str, on: bool) -> dict:
     """开/关一个设备，并且**读回确认**——只看写接口的 ack 不算成功。"""
     switch = _load_table()["switches"].get(sid)
     if switch is None:
-        raise UnknownSwitch(f"未知开关：{sid}")
+        raise UnknownDevice(f"未知设备：{sid}")
     _client()
     did, prop = switch["did"], switch["prop"]
     with _device_lock(did):
         dev = _dev(did)
-        dev.set(prop, want)
+        dev.set(prop, on)
         # 云接口读状态有约 1s 延迟，第一次读回常常还是旧值，所以间隔重读几次
-        actual = want
+        actual = on
         for _ in range(4):
             time.sleep(0.4)
             actual = bool(dev.get(prop))
-            if actual == want:
+            if actual == on:
                 break
     with _cache_lock:
         _disk.pop(f"switch:{sid}", None)  # 只作废这一台的缓存，别的设备照常命中
     return {"id": sid, "on": actual}
+
+
+AUTH_FILE = Path.home() / ".config" / "mijia-api" / "auth.json"
+
+
+def check_table() -> None:
+    """静态：设备表能解析（本地文件，不碰云）。"""
+    _load_table()
+
+
+def check_cloud() -> None:
+    """静态：登录态文件在不在（只 stat，不解析）。"""
+    if not AUTH_FILE.exists():
+        raise config.NotConfigured(f"米家没登录：{AUTH_FILE} 不存在，先扫码登录")
+
+
+def probe() -> None:
+    """运行期：真的登一次、拉一遍设备列表。"""
+    warm()
+
+
+health.register("mijia.table", check=check_table)
+health.register("mijia.cloud", check=check_cloud, probe=probe)
