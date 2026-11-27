@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "secret_protection": {
+    "deny_paths": ["../config", "../.devdata/config", "/data/.config/mijia-api"]
+  }
+}
