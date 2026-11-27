@@ -1,11 +1,12 @@
 name: image
 
-# 镜像与 Release 只在版本 tag 上出（v0.2.0 这种）；main 与 PR 只跑测试。
+# PR 与 main 只跑测试；出镜像走版本 tag（或手动 dispatch 重推 latest）
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,12 +15,17 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # 仓库名是 HomeOS（带大写），而镜像名必须全小写：不能直接用 ${{ github.repository }}
+  REGISTRY_IMAGE: ghcr.io/uglyboy-tl/homeos
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -27,50 +33,94 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest -q
 
-  image:
+  # 两个架构原生编译（公开仓库的 arm64 runner 免费），比单机 QEMU 快一个数量级。
+  # 各自按 digest 推送，最后由 merge 合成一个多架构 tag。
+  build:
     needs: test
-    # 只有版本 tag 才构建：一次 arm64 走 QEMU 十几分钟，main 上每次都推包不值。
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    # contents: write 用来建 Release；packages: write 用来推镜像。
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: 导出 digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # 建 Release
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      # 只有 arm64：opencode 只发 arm64 release，amd64 构建会直接失败。
-      # GitHub 托管 runner 是 amd64，所以走 QEMU 模拟（能跑，比真机慢几分钟）。
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.REGISTRY_IMAGE }}
+          # compose.yaml 钉的是 :latest，所以 tag 上除了版本号还要推 latest。
+          # tag 必须三段（v0.2.0）：非三段匹配不上 semver，只会推 latest 覆盖稳定版
           tags: |
             type=semver,pattern={{version}}
-            # compose.yaml 里钉的是 :latest，所以 release 除了版本号还要推 latest
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      # Release 与镜像同一次构建：有 Release 就说明镜像已推好。--latest 让 newest tag 成为 latest。
-      # tag 一律用 vX.Y.Z：非三段（如 v1）匹配不上 semver，只会推 latest 覆盖稳定版
+            type=raw,value=latest
+      - name: 合成多架构 tag
+        working-directory: /tmp/digests
+        run: |
+          # 下面就是要把 tag 与 digest 拆成多个参数
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$REGISTRY_IMAGE@sha256:%s " *)
+      # Release 与镜像同一流程：有 Release 就说明镜像已推好
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }} # 没有 checkout，gh 只能靠这个知道是哪个仓库
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes --latest --verify-tag && exit 0
-          echo "release 已存在，改成标记为 latest" >&2
-          gh release edit "$GITHUB_REF_NAME" --latest
+          gh release create "$GITHUB_REF_NAME" --generate-notes --latest --verify-tag \
+            || gh release edit "$GITHUB_REF_NAME" --latest
