@@ -1,15 +1,14 @@
-"""WS 路由的公共约定：缺配置回 `{"error"}` 帧，而不是 HTTP 503。
+"""WS 路由的公共约定：不可用回 `{"type": "error"}` 帧。
 
-WS 在握手之后才能发帧，所以 `ready()` 比 `config.ready()` 多一步 accept，
-`Rejected` 用来中止后续 handler。
-"""
+WS 握手之后才能发帧，所以 `ready()` 比 HTTP 依赖多一步 accept；`Rejected` 用来中止 handler。"""
 
 import contextlib
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from .. import config
+from . import health
+from .errors import ApiError
 
 # 客户端提前走了：uvicorn 的 ClientDisconnected 是 OSError，向已关闭的连接发送抛 RuntimeError
 GONE = (WebSocketDisconnect, OSError, RuntimeError)
@@ -34,15 +33,16 @@ async def close(ws: WebSocket) -> None:
         await ws.close()
 
 
-def ready(*fields: str):
-    """WS 路由依赖：先 accept（否则连错误帧都发不出去），缺配置就发帧、断开、中止。"""
+def ready(name: str):
+    """WS 路由依赖：先 accept（否则连错误帧都发不出去），再查健康登记簿。"""
 
     async def check(ws: WebSocket) -> None:
         await ws.accept()
         try:
-            config.require(*fields)
-        except config.NotConfigured as e:
-            await send(ws, {"error": str(e)})
+            health.check(name)
+            health.guard(name)
+        except ApiError as e:
+            await send(ws, {"type": "error", "code": e.code, "message": str(e)})
             await close(ws)
             raise Rejected from e
 

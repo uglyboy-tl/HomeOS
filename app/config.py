@@ -1,7 +1,6 @@
-"""运行期配置：服务与密钥读 config/*.yaml，只有运行模式与路径读环境变量。
+"""运行期配置：服务与密钥读 config/*.yaml，运行模式与路径读环境变量。
 
-镜像里除挂载点（web/pages、/data、/app/config）之外全只读，所以路径都是常量。
-"""
+解析结果写成模块属性；写错的地方记进 `PROBLEMS`，不拦启动，从 `/api/info` 能看到。"""
 
 import logging
 import os
@@ -9,6 +8,9 @@ import re
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from .lib.validation import describe
 
 log = logging.getLogger("homeos")
 
@@ -22,18 +24,9 @@ DATA_DIR = Path("/data") if os.access("/data", os.W_OK) else APP_DIR.parent / ".
 
 # 配置目录：容器里是挂载的 /app/config，本机是仓库 config/
 CONFIG_DIR = Path(os.environ.get("HOMEOS_CONFIG_DIR") or APP_DIR.parent / "config").resolve()
-# 镜像里另存的一份默认配置：挂载目录为空时从这复制，令牌不在里面
-DEFAULTS_DIR = APP_DIR.parent / "defaults"
 MIJIA_CONFIG = CONFIG_DIR / "mijia.yaml"
 SERVICES_CONFIG = CONFIG_DIR / "homeos.yaml"
-
-# opencode（127.0.0.1，只给 /oc 反代用）。口令由 entrypoint 写进 homeos.yaml 的
-# opencode.serve_password，容器启动前生成；本机开发不设，服务不开鉴权。
-OC_HOST = "127.0.0.1"
-OC_PORT = 14100
-
-# 启动时后台预热米家（登录 + 设备列表约 0.8s，别让第一个请求付这笔钱）；测试里关掉
-WARM_MIJIA = True
+TOKEN_FILE = CONFIG_DIR / "server.token"
 
 # 本地开发：非 DEV 才挂 /_docs、才信任"没有反向代理"
 DEV = os.environ.get("HOMEOS_DEV") == "1"
@@ -45,32 +38,121 @@ MPD_CONNECT_TIMEOUT = 3.0
 MPD_TIMEOUT = 10.0
 MPD_SYNC_TIMEOUT = 60.0  # update 与重建列表共用一个预算
 ASR_TIMEOUT = 10.0
+ASK_TIMEOUT = 90.0  # 一次性 ask 的预算，流式由调用方自己控
 
-# 产品内置默认值：只收「yaml 里留空也有意义」的项（服务地址、账号、密钥都不在此）。
-DEFAULTS = {
-    "mpd": {"port": 6600},
-    "azure_asr": {
-        "endpoint": "eastasia.stt.speech.microsoft.com",
-        "lang": "zh-CN",  # Azure 只认完整 locale，裸 zh 会 400
-    },
-}
+# agent 内核：二进制、agent 目录、扩展可以用环境变量指到本机那份（路径属于部署差异）
+PI_BIN = os.environ.get("HOMEOS_PI_BIN") or "pi"
+PI_AGENT_DIR = Path(os.environ.get("HOMEOS_PI_AGENT_DIR") or (DATA_DIR / "pi"))
+# 会话落盘目录：属于运行时数据区（容器里 /data 是命名卷），重启能续上上下文
+PI_SESSION_DIR = Path(os.environ.get("HOMEOS_PI_SESSION_DIR") or (DATA_DIR / "sessions"))
+# 扩展：秘密与危险命令拦截（cc-safety-net）；路径边界靠容器挂载与它的 deny_paths
+PI_EXTENSIONS = [
+    Path(p).expanduser().resolve()
+    for p in (os.environ.get("HOMEOS_PI_EXTENSIONS") or "").split(":")
+    if p.strip()
+]
+
+# 本次解析发现的问题（拼写、类型、令牌格式/权限）；只记不改，供 /api/info 与日志使用
+PROBLEMS: list[str] = []
 
 
-def _copy_default(path: Path) -> None:
-    """挂载目录里没这份配置就从镜像的默认那份复制一份过去。"""
-    if path.exists():
-        return
-    src = DEFAULTS_DIR / path.name
+class NotConfigured(RuntimeError):
+    """外部服务缺配置。由 main.py 统一转 503，业务模块不用管。"""
+
+
+class _Section(BaseModel):
+    """yaml 的一段：留空（不写或写 ""）等于用默认值，写了不认识的键要报出来。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_blanks(cls, data):
+        if not isinstance(data, dict):
+            return {}
+        return {key: value for key, value in data.items() if value not in (None, "")}
+
+
+class Gotify(_Section):
+    url: str = ""
+    token: str = ""
+
+
+class Beszel(_Section):
+    url: str = ""
+    user: str = ""
+    password: str = ""
+
+
+class Mpd(_Section):
+    host: str = ""
+    port: int = Field(default=6600, ge=1, le=65535)
+
+
+class AzureAsr(_Section):
+    endpoint: str = "eastasia.stt.speech.microsoft.com"  # 只认域名，不能带协议与路径
+    api_key: str = ""
+    lang: str = "zh-CN"  # Azure 只认完整 locale，裸 zh 会 400
+
+
+class Services(_Section):
+    gotify: Gotify = Field(default_factory=Gotify)
+    beszel: Beszel = Field(default_factory=Beszel)
+    mpd: Mpd = Field(default_factory=Mpd)
+    azure_asr: AzureAsr = Field(default_factory=AzureAsr)
+
+
+def _read_yaml() -> object:
     try:
-        path.write_bytes(src.read_bytes())
-        log.info("已从 %s 生成 %s", src, path)
-    except OSError as e:
-        log.error("生成 %s 失败，直接用默认那份：%s", path, e)
+        return yaml.safe_load(SERVICES_CONFIG.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, yaml.YAMLError) as e:
+        PROBLEMS.append(f"读 {SERVICES_CONFIG.name} 失败：{e}")
+        return {}
 
 
-def _ensure_files() -> None:
-    for name in ("mijia.yaml", "homeos.yaml"):
-        _copy_default(CONFIG_DIR / name)
+def _load(name: str, model: type[BaseModel], raw: object) -> BaseModel:
+    """一段一段校验：坏掉的键丢掉再试一次，好的字段照用（比如 port 写错不该让 host 也失效）。"""
+    data = raw if isinstance(raw, dict) else {}
+    for _ in range(4):
+        try:
+            return model.model_validate(data)
+        except ValidationError as e:
+            PROBLEMS.append(f"{name}：{describe(e.errors()[0])}")
+            bad = {str(err["loc"][0]) for err in e.errors() if err["loc"]}
+            if not bad:
+                break
+            data = {key: value for key, value in data.items() if key not in bad}
+    return model()
+
+
+def _services() -> Services:
+    raw = _read_yaml()
+    if not isinstance(raw, dict):
+        PROBLEMS.append(f"{SERVICES_CONFIG.name} 顶层应该是映射（段名: 内容）")
+        return Services()
+    known = Services.model_fields
+    sections = {}
+    for name, value in raw.items():
+        if name not in known:
+            PROBLEMS.append(f"{SERVICES_CONFIG.name} 里有不认识的段：{name}")
+            continue
+        sections[name] = _load(name, known[name].annotation, value)
+    return Services.model_validate(sections)
+
+
+def _env(name: str, default: str) -> str:
+    """可轮换的令牌类才走环境变量；密码与运行参数不进环境。"""
+    return (os.environ.get(name) or "").strip() or default
+
+
+def _read_token() -> str:
+    """对外令牌：docker/prepare.py 首次启动时生成的文件（0600），人也可以手改。"""
+    try:
+        return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 # 各服务“必须有值”的项：yaml 键 → 模块属性（属性里已合并环境变量覆盖）
@@ -83,12 +165,7 @@ REQUIRED = {
     "azure_asr.endpoint": "ASR_HOST",
     "azure_asr.api_key": "ASR_KEY",
     "mpd.host": "MPD_HOST",
-    "opencode.go_api_key": "OPENCODE_GO_KEY",
 }
-
-
-class NotConfigured(RuntimeError):
-    """外部服务缺配置。由 main.py 统一转 503，业务模块不用管。"""
 
 
 def _value(field: str):
@@ -103,63 +180,39 @@ def require(*fields: str) -> None:
         raise NotConfigured(f"没配 {'、'.join(missing)}：填 config/homeos.yaml 里对应项")
 
 
-def ready(*fields: str):
-    """路由依赖：`APIRouter(dependencies=[Depends(config.ready("mpd.host"))])`。"""
-
-    def check() -> None:
-        require(*fields)
-
-    return check
-
-
-def _env(name: str, default):
-    return (os.environ.get(name) or "").strip() or default
-
-
-def _section(doc: dict, name: str) -> dict:
-    """yaml 里的留空（不写或写 ""）等于取默认值；默认值没列的键原样放行。"""
-    got = doc.get(name) or {}
-    base = DEFAULTS.get(name, {})
-    return {k: got.get(k) or base.get(k) or "" for k in set(base) | set(got)}
+def _host(endpoint: str) -> str:
+    return endpoint.removeprefix("https://").removeprefix("wss://").rstrip("/")
 
 
 def _apply() -> None:
     global GOTIFY_URL, GOTIFY_TOKEN, BESZEL_URL, BESZEL_USER, BESZEL_PASSWORD, MPD_HOST, MPD_PORT
-    global ASR_HOST, ASR_KEY, ASR_LANG, TOKEN, OC_SERVER_PASSWORD, OPENCODE_GO_KEY
-    _ensure_files()
-    try:
-        doc = yaml.safe_load(SERVICES_CONFIG.read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        doc = {}
-    except (OSError, yaml.YAMLError) as e:
-        log.error("读 %s 失败，用默认值：%s", SERVICES_CONFIG, e)
-        doc = {}
-    gotify = _section(doc, "gotify")
-    beszel = _section(doc, "beszel")
-    mpd = _section(doc, "mpd")
-    asr = _section(doc, "azure_asr")
-    opencode = doc.get("opencode") or {}
+    global ASR_HOST, ASR_KEY, ASR_LANG, TOKEN
+    PROBLEMS.clear()
+    services = _services()
 
-    GOTIFY_URL = gotify.get("url", "")
-    GOTIFY_TOKEN = _env("GOTIFY_TOKEN", gotify.get("token", ""))
-    BESZEL_URL = beszel.get("url", "")
-    BESZEL_USER = beszel.get("user", "")
-    BESZEL_PASSWORD = beszel.get("password", "")
-    MPD_HOST = mpd.get("host", "")
-    MPD_PORT = int(mpd["port"])
-    # Azure 只认完整 locale（裸 zh 会 400），endpoint 不能带协议与路径
-    ASR_HOST = asr.get("endpoint", "").removeprefix("https://").removeprefix("wss://").rstrip("/")
-    ASR_LANG = asr["lang"]
-    ASR_KEY = _env("AZURE_SPEECH_KEY", asr.get("api_key", ""))
-    # 口令只能由 entrypoint 写进文件；模型的 key 可用环境变量覆盖
-    OC_SERVER_PASSWORD = opencode.get("serve_password") or ""
-    OPENCODE_GO_KEY = _env("OPENCODE_GO_API_KEY", opencode.get("go_api_key"))
+    GOTIFY_URL = services.gotify.url
+    GOTIFY_TOKEN = _env("GOTIFY_TOKEN", services.gotify.token)
+    BESZEL_URL = services.beszel.url
+    BESZEL_USER = services.beszel.user
+    BESZEL_PASSWORD = services.beszel.password
+    MPD_HOST = services.mpd.host
+    MPD_PORT = services.mpd.port
+    ASR_HOST = _host(services.azure_asr.endpoint)
+    ASR_LANG = services.azure_asr.lang
+    ASR_KEY = _env("AZURE_SPEECH_KEY", services.azure_asr.api_key)
 
-    # 空 = /oc 关闭、其余接口放行；只收 [A-Za-z0-9_-]，它要拼进 Set-Cookie
-    TOKEN = str((doc.get("server") or {}).get("token") or "").strip()
+    TOKEN = _read_token()
+    # 空 = 生产全关（DEV 放行）；只收 [A-Za-z0-9_-]，它要拼进 Set-Cookie
     if TOKEN and not re.fullmatch(r"[A-Za-z0-9_-]{16,}", TOKEN):
-        log.error("server.token 只接受 16 位以上 [A-Za-z0-9_-]，已忽略")
+        PROBLEMS.append("server.token 只接受 16 位以上 [A-Za-z0-9_-]，已忽略")
         TOKEN = ""
+    if TOKEN:
+        mode = TOKEN_FILE.stat().st_mode & 0o777
+        if mode & 0o077:
+            PROBLEMS.append(f"server.token 权限是 {mode:o}，建议 600（同机其他用户可读）")
+
+    for problem in PROBLEMS:
+        log.error("配置：%s", problem)
 
 
 _apply()
