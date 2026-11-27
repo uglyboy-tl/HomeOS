@@ -28,12 +28,12 @@ def test_page_sets_cookie_only_over_https(tok):
 
 
 def test_cookie_never_carries_the_token(tok):
-    """页面不认证就发 cookie，所以里面只能是派生值，否则等于把 /oc 的钥匙公开。"""
+    """页面不认证就发 cookie，所以里面只能是派生值，否则等于把令牌公开。"""
     cookie = TestClient(app).get("/mijia").headers["set-cookie"]
     assert "a" * 32 not in cookie
     wrong = TestClient(app)
     wrong.headers["X-HomeOS-Token"] = cookie.split("homeos=")[1].split(";")[0]
-    assert wrong.get("/oc/api/info").status_code == 401
+    assert wrong.get("/api/pages").status_code == 401
 
 
 def test_api_needs_auth(tok):
@@ -85,18 +85,18 @@ def test_open_without_token_in_dev(monkeypatch):
 
 
 def test_closed_without_token_in_prod(monkeypatch):
-    """生产未配令牌 = 接口全关：否则 /api/agent/say 的 device 模式就是匿名 shell。"""
+    """生产未配令牌 = 接口全关。"""
     monkeypatch.setattr(config, "TOKEN", "")
     monkeypatch.setattr(config, "DEV", False)
     c = TestClient(app)
     assert c.get("/api/pages").status_code == 401
-    assert c.get("/api/agent/turn").status_code == 401
+    assert c.get("/api/mijia/devices").status_code == 401
     assert c.get("/api/ready").status_code == 200  # 健康检查不受影响
 
 
 def test_every_api_router_is_guarded(tok):
     c = TestClient(app)
-    for path in ("/api/pages", "/api/mijia/devices", "/api/agent/info"):
+    for path in ("/api/pages", "/api/mijia/devices", "/api/mpd/state"):
         assert c.get(path).status_code == 401, path
 
 

@@ -1,7 +1,5 @@
 """应用装配：只有路由表和 lifespan，没有业务逻辑。"""
 
-import asyncio
-import contextlib
 import logging
 import threading
 from contextlib import asynccontextmanager
@@ -12,8 +10,7 @@ from fastapi.responses import JSONResponse
 from . import config
 from .lib import shutdown, sockets
 from .lib.security import require_auth
-from .routes import agent, asr, health, metrics, mijia, mpd, notify, oc, pages
-from .services import agent as agent_service
+from .routes import asr, health, metrics, mijia, mpd, notify, pages
 from .services import mijia as mijia_service
 
 log = logging.getLogger("homeos")
@@ -35,16 +32,9 @@ async def lifespan(_app: FastAPI):
     shutdown.stop_event.clear()
     if config.WARM_MIJIA:
         threading.Thread(target=_warm_mijia, daemon=True).start()
-    # 常驻订阅 opencode 的事件流：本轮文本靠它攒，前端只按自己的节奏来取
-    stop = asyncio.Event()
-    watcher = asyncio.create_task(agent_service.run_subscriber(stop))
     try:
         yield
     finally:
-        stop.set()
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
         shutdown.stop_event.set()  # 先让 SSE 生成器退出，再关服务
 
 
@@ -58,14 +48,12 @@ def create_app() -> FastAPI:
         openapi_url="/_openapi.json" if config.DEV else None,
         lifespan=lifespan,
     )
-    # 领域异常 → HTTP：三个入口各管一类（agent 的 / 缺配置 / WS 已回帧）
-    agent.install_error_handlers(app)
     app.add_exception_handler(config.NotConfigured, _not_configured)
     sockets.install(app)
 
     if not config.TOKEN:
         log.warning(
-            "未配置 server.token：/oc 关闭，%s",
+            "未配置 server.token：%s",
             "接口放行（DEV）" if config.DEV else "接口需令牌（生产）",
         )
     # 顺序有意义：API 在前，兜底的静态路由在后
@@ -77,12 +65,10 @@ def create_app() -> FastAPI:
         notify.router,
         metrics.router,
         asr.router,
-        agent.router,
     ):
         api.include_router(r)
     app.include_router(health.router)
     app.include_router(api)
-    app.include_router(oc.router)
     app.include_router(pages.router)
     return app
 
