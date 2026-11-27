@@ -115,12 +115,168 @@ def test_ws_route_pushes_partials_then_text(monkeypatch):
     monkeypatch.setattr(asr, "Session", _FakeSession)
     with TestClient(app).websocket_connect("/api/asr/stream") as ws:
         ws.send_bytes(b"\x00\x01" * 100)
-        assert ws.receive_json() == {"partial": "把灯"}
+        assert ws.receive_json() == {"type": "partial", "text": "把灯"}
         ws.send_text("end")
-        assert ws.receive_json() == {"text": "把灯关掉。"}
+        assert ws.receive_json() == {"type": "final", "text": "把灯关掉。"}
 
 
 def test_ws_route_reports_missing_config(monkeypatch):
     monkeypatch.setattr(config, "ASR_KEY", "")
     with TestClient(app).websocket_connect("/api/asr/stream") as ws:
-        assert "azure_asr.api_key" in ws.receive_json()["error"]
+        frame = ws.receive_json()
+        assert frame["type"] == "error" and frame["code"] == "not_configured"
+        assert "azure_asr.api_key" in frame["message"]
+
+
+class _ScriptedWs:
+    """按剧本吐帧的假连接：能正常收尾、能半路抛错、能一直不回话。"""
+
+    def __init__(self, frames=(), boom: Exception | None = None, hang: bool = False):
+        self.frames = list(frames)
+        self.boom = boom
+        self.hang = hang
+        self.send_boom: Exception | None = None
+        self.sent: list = []
+        self.closed = False
+
+    async def send(self, data):
+        if self.send_boom is not None:
+            raise self.send_boom
+        self.sent.append(data)
+
+    async def close(self):
+        self.closed = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.frames:
+            return self.frames.pop(0)
+        if self.hang:
+            await asyncio.sleep(3600)
+        if self.boom is not None:
+            raise self.boom
+        raise StopAsyncIteration
+
+
+def _run_session(monkeypatch, ws, timeout=0.2, action=None):
+    async def connect(*_args, **_kwargs):
+        return ws
+
+    monkeypatch.setattr(websockets, "connect", connect)
+
+    async def main():
+        partials: list[str] = []
+
+        async def on_partial(text):
+            partials.append(text)
+
+        async with asr.Session(on_partial) as session:
+            if action is not None:
+                await action(session)
+            return await session.finish(timeout=timeout), partials
+
+    return asyncio.run(main())
+
+
+def test_connect_failure_is_asr_error(monkeypatch):
+    async def connect(*_args, **_kwargs):
+        raise OSError("dns 解析不了")
+
+    monkeypatch.setattr(websockets, "connect", connect)
+
+    async def main():
+        async with asr.Session(lambda _text: None):
+            pass
+
+    with pytest.raises(asr.AsrError, match="连不上识别服务"):
+        asyncio.run(main())
+
+
+def test_binary_frames_from_server_are_ignored(monkeypatch):
+    ws = _ScriptedWs([b"\x00\x01" * 10, "Path:turn.end\r\n\r\n"])
+    text, partials = _run_session(monkeypatch, ws)
+    assert text is None and partials == []
+
+
+def test_empty_hypothesis_does_not_notify(monkeypatch):
+    ws = _ScriptedWs(
+        [
+            asr._text_frame("speech.hypothesis", {"Text": "   "}),
+            asr._text_frame("speech.phrase", {"RecognitionStatus": "NoMatch"}),
+            "Path:turn.end\r\n\r\n",
+        ]
+    )
+    text, partials = _run_session(monkeypatch, ws)
+    assert partials == []
+    assert text is None, "没识别出来就是 None，不是空字符串"
+
+
+def test_read_loop_failure_surfaces_on_finish(monkeypatch):
+    ws = _ScriptedWs(boom=websockets.WebSocketException("连接被重置"))
+    with pytest.raises(asr.AsrError, match="识别连接断了"):
+        _run_session(monkeypatch, ws)
+
+
+def test_finish_timeout_is_asr_error(monkeypatch):
+    ws = _ScriptedWs(hang=True)  # 一直不回 turn.end
+    with pytest.raises(asr.AsrError, match="没回结果"):
+        _run_session(monkeypatch, ws, timeout=0.05)
+
+
+def test_send_on_broken_socket_is_asr_error(monkeypatch):
+    ws = _ScriptedWs()
+
+    async def break_it(session):
+        ws.send_boom = websockets.WebSocketException("断了")
+        await session.send(b"\x00")
+
+    with pytest.raises(asr.AsrError, match="识别连接断了"):
+        _run_session(monkeypatch, ws, action=break_it)
+
+
+def test_check_config_passes_when_configured():
+    asr.check_config()  # conftest 的默认环境就是配好的
+
+
+def test_ws_route_stops_a_too_long_stream(monkeypatch):
+    monkeypatch.setattr(asr, "MAX_BYTES", 10)
+    monkeypatch.setattr(asr, "Session", _FakeSession)
+    with TestClient(app).websocket_connect("/api/asr/stream") as ws:
+        ws.send_bytes(b"\x00\x01" * 100)
+        frame = ws.receive_json()
+        assert frame == {"type": "error", "code": "too_long", "message": "说得太长了"}
+
+
+def test_ws_route_reports_upstream_failure(monkeypatch):
+    class _Broken(_FakeSession):
+        async def send(self, pcm):
+            raise asr.AsrError("云端的锅")
+
+    monkeypatch.setattr(asr, "Session", _Broken)
+    with TestClient(app).websocket_connect("/api/asr/stream") as ws:
+        ws.send_bytes(b"\x00\x01")
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert frame["code"] == "asr_failed" and "云端的锅" in frame["message"]
+
+
+def test_ws_route_ignores_empty_frames(monkeypatch):
+    monkeypatch.setattr(asr, "Session", _FakeSession)
+    with TestClient(app).websocket_connect("/api/asr/stream") as ws:
+        ws.send_text("随便发点什么")  # 不是 end、也不是音频：忽略
+        ws.send_bytes(b"")
+        ws.send_bytes(b"\x00\x01" * 10)
+        assert ws.receive_json() == {"type": "partial", "text": "把灯"}
+
+
+def test_ws_route_survives_client_disconnect(monkeypatch):
+    monkeypatch.setattr(asr, "Session", _FakeSession)
+    with TestClient(app).websocket_connect("/api/asr/stream") as ws:
+        ws.send_bytes(b"\x00\x01" * 10)
+        assert ws.receive_json()["type"] == "partial"
+    # 客户端走了以后再来一轮：服务端没被上一轮的断开卡住
+    with TestClient(app).websocket_connect("/api/asr/stream") as ws:
+        ws.send_bytes(b"\x00\x01" * 10)
+        assert ws.receive_json() == {"type": "partial", "text": "把灯"}

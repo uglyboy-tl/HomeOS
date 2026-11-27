@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app import config
 from app.main import app
-from app.services import mijia
+from app.services import mijia, speech
 
 DEVICES = {
     "rooms": [{"id": "客厅", "name": "客厅"}, {"id": "次卧", "name": "次卧"}],
@@ -33,16 +33,18 @@ VALUES = {
 
 @pytest.fixture
 def fake(monkeypatch):
+    def say(text, device=""):
+        return {"text": text.strip(), "did": device}
+
     monkeypatch.setattr(mijia, "devices", lambda: DEVICES)
-    monkeypatch.setattr(mijia, "read_state", lambda room=None: VALUES)
-    monkeypatch.setattr(mijia, "set_switch", lambda sid, on: {"id": sid, "on": on})
-    monkeypatch.setattr(mijia, "say", lambda text, did="": {"text": text.strip(), "did": did})
+    monkeypatch.setattr(mijia, "values", lambda ids=None: VALUES)
+    monkeypatch.setattr(mijia, "set_power", lambda sid, on: {"id": sid, "on": on})
+    monkeypatch.setattr(speech, "say", say)
 
 
 def test_devices_is_pure_data(fake):
     """设备清单只有名字与类型，没有状态、没有排版。"""
-    body = TestClient(app).get("/api/mijia/devices").json()
-    assert body["ok"] is True
+    body = TestClient(app).get("/api/info/mijia").json()
     assert [r["name"] for r in body["rooms"]] == ["客厅", "次卧"]
     assert body["devices"][0] == {
         "id": "客厅/吸顶灯",
@@ -53,82 +55,104 @@ def test_devices_is_pure_data(fake):
     assert "on" not in body["devices"][0]
 
 
-def test_state_is_raw_values(fake):
-    """状态按设备 id 给原始数值；「24.4° 34%」这种格式是前端的事。"""
-    values = TestClient(app).get("/api/mijia/state").json()["values"]
+def test_values_are_raw_data(fake):
+    """值按设备 id 给原始数值；「24.4° 34%」这种格式是前端的事。"""
+    values = TestClient(app).get("/api/mijia/values").json()["values"]
     assert values["客厅/吸顶灯"] == {"on": True}
     assert values["客厅/温湿度"] == {"temperature": 24.4, "humidity": 34}
     assert values["次卧/烟感"] == {"status": 1, "fault": False, "battery": 100}
     assert "text" not in values["客厅/温湿度"]
 
 
-def test_switch_returns_confirmed_value(fake):
-    r = TestClient(app).post("/api/mijia/switch", json={"id": "客厅/吸顶灯", "on": False})
+def test_values_accepts_ids_filter(fake, monkeypatch):
+    seen = {}
+
+    def read(ids=None):
+        seen["ids"] = ids
+        return VALUES
+
+    monkeypatch.setattr(mijia, "values", read)
+    r = TestClient(app).get("/api/mijia/values", params={"ids": "客厅/吸顶灯,次卧/烟感"})
+    assert r.status_code == 200 and seen["ids"] == ["客厅/吸顶灯", "次卧/烟感"]
+
+
+def test_unknown_device_is_400(monkeypatch):
+    def read(ids=None):
+        raise mijia.UnknownDevice("未知设备：ghost")
+
+    monkeypatch.setattr(mijia, "values", read)
+    r = TestClient(app).get("/api/mijia/values", params={"ids": "ghost"})
+    assert r.status_code == 400
+    assert r.json()["error"] == {"code": "unknown_device", "message": "未知设备：ghost"}
+
+
+def test_power_returns_confirmed_value(fake):
+    r = TestClient(app).put("/api/mijia/power", json={"id": "客厅/吸顶灯", "on": False})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "id": "客厅/吸顶灯", "on": False}
+    assert r.json() == {"id": "客厅/吸顶灯", "on": False}
 
 
-def test_switch_rejects_bad_body(fake):
-    assert TestClient(app).post("/api/mijia/switch", json={"id": "x"}).status_code == 422
+def test_power_rejects_bad_body(fake):
+    assert TestClient(app).put("/api/mijia/power", json={"id": "x"}).status_code == 422
 
 
-def test_say_passes_text_through(fake):
-    r = TestClient(app).post("/api/mijia/say", json={"text": " 开会了 "})
+def test_speech_passes_text_through(fake):
+    r = TestClient(app).post("/api/speech", json={"text": " 开会了 "})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "text": "开会了", "did": ""}
+    assert r.json() == {"text": "开会了", "did": ""}
 
 
-def test_say_can_target_another_speaker(fake):
-    r = TestClient(app).post("/api/mijia/say", json={"text": "开会了", "did": "380623598"})
+def test_speech_can_target_another_speaker(fake):
+    r = TestClient(app).post("/api/speech", json={"text": "开会了", "device": "380623598"})
     assert r.status_code == 200
     assert r.json()["did"] == "380623598"
 
 
-def test_say_rejects_non_numeric_did(fake):
-    r = TestClient(app).post("/api/mijia/say", json={"text": "喂", "did": "客厅"})
-    assert r.status_code == 400
+def test_speech_rejects_empty_text(fake):
+    r = TestClient(app).post("/api/speech", json={"text": "   "})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_input"
 
 
-def test_say_rejects_bad_body(fake):
-    assert TestClient(app).post("/api/mijia/say", json={}).status_code == 422
+def test_speech_rejects_bad_body(fake):
+    assert TestClient(app).post("/api/speech", json={}).status_code == 422
 
 
-def test_say_without_speaker_is_503(monkeypatch):
-    def boom(text, did=""):
-        raise mijia.MijiaError("没配播报音箱")
+def test_speech_without_speaker_is_503(monkeypatch):
+    def boom(text, device=""):
+        raise mijia.MijiaError("没配播报啣叭")
 
-    monkeypatch.setattr(mijia, "say", boom)
-    r = TestClient(app).post("/api/mijia/say", json={"text": "喂"})
-    assert r.status_code == 503 and "播报音箱" in r.json()["detail"]
+    monkeypatch.setattr(speech, "say", boom)
+    r = TestClient(app).post("/api/speech", json={"text": "喂"})
+    assert r.status_code == 503 and "播报" in r.json()["error"]["message"]
 
 
-def test_unknown_switch_is_400(fake, monkeypatch):
+def test_unknown_device_on_power_is_400(fake, monkeypatch):
     def boom(sid, on):
-        raise mijia.UnknownSwitch(f"未知开关：{sid}")
+        raise mijia.UnknownDevice(f"未知设备：{sid}")
 
-    monkeypatch.setattr(mijia, "set_switch", boom)
-    r = TestClient(app).post("/api/mijia/switch", json={"id": "ghost", "on": True})
+    monkeypatch.setattr(mijia, "set_power", boom)
+    r = TestClient(app).put("/api/mijia/power", json={"id": "ghost", "on": True})
     assert r.status_code == 400
-    assert r.json()["detail"] == "未知开关：ghost"  # 不带 KeyError 的引号
+    assert r.json()["error"]["message"] == "未知设备：ghost"  # 不带 KeyError 的引号
 
 
 def test_not_logged_in_is_503(monkeypatch):
-    def boom(room=None):
+    def boom(ids=None):
         raise mijia.MijiaError("米家没登录：auth.json 不在")
 
-    monkeypatch.setattr(mijia, "read_state", boom)
-    r = TestClient(app).get("/api/mijia/state")
-    assert r.status_code == 503 and "没登录" in r.json()["detail"]
+    monkeypatch.setattr(mijia, "values", boom)
+    r = TestClient(app).get("/api/mijia/values")
+    assert r.status_code == 503 and "没登录" in r.json()["error"]["message"]
 
 
 def test_internal_error_does_not_leak_details(monkeypatch):
-    def boom(room=None):
+    def boom(ids=None):
         raise RuntimeError("token=secret did=1095838227")
 
-    monkeypatch.setattr(mijia, "read_state", boom)
-    r = TestClient(app).get("/api/mijia/state")
+    monkeypatch.setattr(mijia, "values", boom)
+    r = TestClient(app).get("/api/mijia/values")
     assert r.status_code == 500
-    assert r.json()["detail"] == "米家内部错误"
+    assert r.json()["error"]["message"] == "米家内部错误"
     assert "secret" not in r.text and "1095838227" not in r.text
 
 
@@ -176,18 +200,11 @@ def test_state_cached_per_device(tmp_path, monkeypatch):
     calls = {"ok": 0, "bad": 0}
 
     table = {
-        "rooms": [
-            {
-                "id": "客厅",
-                "label": "客厅",
-                "switches": [
-                    {"id": "客厅/好灯", "label": "好灯", "did": "1", "prop": "on"},
-                    {"id": "客厅/坏灯", "label": "坏灯", "did": "2", "prop": "on"},
-                ],
-                "sensors": [],
-            }
-        ],
-        "switches": {},
+        "rooms": [],
+        "switches": {
+            "客厅/好灯": {"id": "客厅/好灯", "label": "好灯", "did": "1", "prop": "on"},
+            "客厅/坏灯": {"id": "客厅/坏灯", "label": "坏灯", "did": "2", "prop": "on"},
+        },
         "sensors": {},
     }
     monkeypatch.setattr(mijia, "_load_table", lambda: table)
@@ -205,68 +222,35 @@ def test_state_cached_per_device(tmp_path, monkeypatch):
         mijia, "_read", lambda did, prop: read_bad(did, prop) if did == "2" else read_ok(did, prop)
     )
 
-    values = mijia.read_state()["values"]
+    values = mijia.values()["values"]
     assert values["客厅/好灯"] == {"on": True}
     assert "error" in values["客厅/坏灯"]
     assert calls == {"ok": 1, "bad": 1}
 
     # 再读一次：好灯命中缓存不再调云，坏灯继续重试
-    mijia.read_state()
+    mijia.values()
     assert calls == {"ok": 1, "bad": 2}
 
 
-def test_state_accepts_room_filter(monkeypatch):
-    seen = {}
-
-    def read(room=None):
-        seen["room"] = room
-        return VALUES
-
-    monkeypatch.setattr(mijia, "read_state", read)
-    r = TestClient(app).get("/api/mijia/state", params={"room": "客厅"})
-    assert r.status_code == 200 and seen["room"] == "客厅"
-
-
-def test_unknown_room_is_400(monkeypatch):
-    def read(room=None):
-        raise mijia.UnknownRoom(f"未知房间：{room}")
-
-    monkeypatch.setattr(mijia, "read_state", read)
-    r = TestClient(app).get("/api/mijia/state", params={"room": "nope"})
-    assert r.status_code == 400 and "未知房间" in r.json()["detail"]
-
-
-def test_read_state_filters_room_and_reads_in_parallel(tmp_path, monkeypatch):
-    """只读指定房间；同一间房的设备并行读（顺序不影响结果）。"""
+def test_values_filters_ids_and_skips_other_devices(tmp_path, monkeypatch):
+    """只读指定设备；写在同一表里的其它设备不会被碰。"""
     monkeypatch.setattr(mijia, "CACHE_FILE", tmp_path / "mijia" / "state.json")
     mijia._disk.clear()
     table = {
-        "rooms": [
-            {
-                "id": "客厅",
-                "label": "客厅",
-                "switches": [
-                    {"id": "客厅/灯", "label": "灯", "did": "1", "prop": "on"},
-                ],
-                "sensors": [
-                    {
-                        "id": "客厅/温湿度",
-                        "label": "温湿度",
-                        "kind": "th",
-                        "did": "1",
-                        "props": {"temperature": "t", "humidity": "h"},
-                    }
-                ],
-            },
-            {
-                "id": "次卧",
-                "label": "次卧",
-                "switches": [{"id": "次卧/灯", "label": "灯", "did": "2", "prop": "on"}],
-                "sensors": [],
-            },
-        ],
-        "switches": {},
-        "sensors": {},
+        "rooms": [],
+        "switches": {
+            "客厅/灯": {"id": "客厅/灯", "label": "灯", "did": "1", "prop": "on"},
+            "次卧/灯": {"id": "次卧/灯", "label": "灯", "did": "2", "prop": "on"},
+        },
+        "sensors": {
+            "客厅/温湿度": {
+                "id": "客厅/温湿度",
+                "label": "温湿度",
+                "kind": "th",
+                "did": "1",
+                "props": {"temperature": "t", "humidity": "h"},
+            }
+        },
     }
     monkeypatch.setattr(mijia, "_load_table", lambda: table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
@@ -275,12 +259,12 @@ def test_read_state_filters_room_and_reads_in_parallel(tmp_path, monkeypatch):
         mijia, "_sensor_values", lambda sensor: {"temperature": 24.0, "humidity": 30}
     )
 
-    values = mijia.read_state("客厅")["values"]
+    values = mijia.values(["客厅/灯", "客厅/温湿度"])["values"]
     assert set(values) == {"客厅/灯", "客厅/温湿度"}
     assert values["客厅/灯"] == {"on": True}
 
-    with pytest.raises(mijia.UnknownRoom):
-        mijia.read_state("没有这间")
+    with pytest.raises(mijia.UnknownDevice):
+        mijia.values(["没有这台"])
 
 
 def _one_switch_table():
@@ -293,7 +277,7 @@ def _one_switch_table():
     }
 
 
-def test_set_switch_confirms_by_readback(monkeypatch):
+def test_set_power_confirms_by_readback(monkeypatch):
     """写完要读回；读回等于目标值才算成功，并且只作废这一台的缓存。"""
     monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
@@ -314,12 +298,12 @@ def test_set_switch_confirms_by_readback(monkeypatch):
     mijia._disk["switch:客厅/灯"] = {"ts": 1, "v": {"on": False}}
     mijia._disk["sensor:客厅/温湿度"] = {"ts": 1, "v": {"temperature": 24.0, "humidity": 30}}
 
-    assert mijia.set_switch("客厅/灯", True) == {"id": "客厅/灯", "on": True}
+    assert mijia.set_power("客厅/灯", True) == {"id": "客厅/灯", "on": True}
     assert "switch:客厅/灯" not in mijia._disk  # 这一台被作废
     assert "sensor:客厅/温湿度" in mijia._disk  # 别的设备不受影响
 
 
-def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
+def test_set_power_reports_actual_value_when_readback_disagrees(monkeypatch):
     """设备没按预期变化时不谎报成功。"""
     monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
     monkeypatch.setattr(mijia, "_client", lambda: object())
@@ -333,13 +317,13 @@ def test_set_switch_reports_actual_value_when_readback_disagrees(monkeypatch):
             return False
 
     monkeypatch.setattr(mijia, "_dev", lambda did: Stubborn())
-    assert mijia.set_switch("客厅/灯", True)["on"] is False
+    assert mijia.set_power("客厅/灯", True)["on"] is False
 
 
-def test_set_switch_rejects_unknown_id(monkeypatch):
+def test_set_power_rejects_unknown_id(monkeypatch):
     monkeypatch.setattr(mijia, "_load_table", _one_switch_table)
-    with pytest.raises(mijia.UnknownSwitch):
-        mijia.set_switch("没有这台", True)
+    with pytest.raises(mijia.UnknownDevice):
+        mijia.set_power("没有这台", True)
 
 
 def test_cached_returns_stale_value_when_refetch_fails(tmp_path, monkeypatch):
@@ -495,8 +479,9 @@ def test_missing_file_is_table_error(tmp_path, monkeypatch):
     assert "读不到设备表" in str(e.value)
 
 
-def test_repo_config_is_valid():
+def test_repo_config_is_valid(repo_root, monkeypatch):
     """仓库里那份真的设备表必须能过校验（改了 YAML 立刻能发现写错）。"""
+    monkeypatch.setattr(config, "MIJIA_CONFIG", repo_root / "config" / "mijia.yaml")
     mijia._table_cache = None
     data = mijia._load_table()
     assert data["rooms"], "至少要有一个房间"

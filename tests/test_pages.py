@@ -86,8 +86,8 @@ def test_bad_icon_falls_back(web):
 
 def test_api_pages_lists_features(web):
     make_page(web, "x", {"title": "示例", "icon": "star"})
-    body = TestClient(app).get("/api/pages").json()
-    assert body["ok"] is True and body["data"][0]["slug"] == "x"
+    body = TestClient(app).get("/api/info/pages").json()
+    assert body[0]["slug"] == "x"
 
 
 def test_symlink_outside_web_is_blocked(web, tmp_path):
@@ -96,3 +96,47 @@ def test_symlink_outside_web_is_blocked(web, tmp_path):
     secret.write_text("s")
     (web / "assets" / "link.txt").symlink_to(secret)
     assert TestClient(app).get("/assets/link.txt").status_code == 404
+
+
+def test_page_sets_a_hardened_cookie(web, monkeypatch):
+    monkeypatch.setattr(config, "TOKEN", "a" * 32)
+    cookie = TestClient(app, base_url="http://testserver").get("/").headers["set-cookie"]
+    assert cookie.startswith("homeos=")
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    assert "Max-Age=2592000" in cookie
+    assert "Secure" not in cookie  # http 下不发 Secure，否则设备收不到
+
+
+def test_cookie_is_secure_over_https(web, monkeypatch):
+    monkeypatch.setattr(config, "TOKEN", "a" * 32)
+    cookie = TestClient(app, base_url="https://testserver").get("/").headers["set-cookie"]
+    assert "Secure" in cookie
+
+
+def test_ready_does_not_hand_out_cookies(monkeypatch):
+    monkeypatch.setattr(config, "TOKEN", "a" * 32)
+    assert "set-cookie" not in TestClient(app).get("/api/ready").headers
+
+
+def test_cache_headers(web, monkeypatch):
+    (web / "assets" / "a.js").write_text("//x")
+    c = TestClient(app)
+    page = c.get("/").headers["cache-control"]
+    assert "no-store" in page
+
+    monkeypatch.setattr(config, "DEV", True)
+    assert "no-store" in c.get("/assets/a.js").headers["cache-control"]
+
+    monkeypatch.setattr(config, "DEV", False)
+    assert "max-age" in c.get("/assets/a.js").headers["cache-control"].lower()
+
+
+def test_absolute_and_dotdot_paths_are_404(web):
+    c = TestClient(app)
+    for path in (
+        "/p/../home.html",
+        "/p/%2e%2e",
+        "/assets//etc/passwd",
+        "/pages/x/assets//etc/passwd",
+    ):
+        assert c.get(path).status_code == 404, path

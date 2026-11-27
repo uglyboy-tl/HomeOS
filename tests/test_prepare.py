@@ -56,7 +56,7 @@ def test_token_is_generated_once_and_owner_only(tmp_path, defaults):
 
 def test_existing_files_are_not_overwritten(tmp_path, defaults):
     cfg = tmp_path / "config"
-    cfg.mkdir()
+    cfg.mkdir(exist_ok=True)
     (cfg / "homeos.yaml").write_text("gotify: {url: 'http://mine'}\n", encoding="utf-8")
     prepare.main([str(cfg), str(defaults)])
     assert "mine" in (cfg / "homeos.yaml").read_text(encoding="utf-8")

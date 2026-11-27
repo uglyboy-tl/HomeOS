@@ -16,13 +16,10 @@ TOUCHED = (
     "ASR_HOST",
     "ASR_KEY",
     "ASR_LANG",
-    "OC_SERVER_PASSWORD",
-    "OPENCODE_GO_KEY",
     "TOKEN",
     "CONFIG_DIR",
     "MIJIA_CONFIG",
     "SERVICES_CONFIG",
-    "DEFAULTS_DIR",
 )
 
 
@@ -32,6 +29,7 @@ def restore():
     yield
     for name, value in saved.items():
         setattr(config, name, value)
+    config.PROBLEMS.clear()
 
 
 @pytest.fixture
@@ -41,18 +39,20 @@ def cfgdir(tmp_path, monkeypatch):
     (defaults / "homeos.yaml").write_text('gotify: {token: ""}\nmpd: {host: "10.0.0.9"}\n')
     (defaults / "mijia.yaml").write_text("rooms: {}\n")
     cfg = tmp_path / "config"
-    cfg.mkdir()
-    monkeypatch.setattr(config, "DEFAULTS_DIR", defaults)
+    cfg.mkdir(exist_ok=True)
     monkeypatch.setattr(config, "CONFIG_DIR", cfg)
     monkeypatch.setattr(config, "SERVICES_CONFIG", cfg / "homeos.yaml")
     monkeypatch.setattr(config, "MIJIA_CONFIG", cfg / "mijia.yaml")
     return cfg
 
 
-def test_copies_defaults_into_empty_mount(cfgdir):
+def test_reads_whatever_is_mounted(cfgdir):
+    """补默认文件是 docker/prepare.py 的事；config 只负责读，缺文件就退回内置默认值。"""
     config._apply()
-    assert (cfgdir / "homeos.yaml").read_text() == 'gotify: {token: ""}\nmpd: {host: "10.0.0.9"}\n'
-    assert (cfgdir / "mijia.yaml").exists()
+    assert config.MPD_HOST == ""  # 没有 homeos.yaml 时不炸
+    assert config.MPD_PORT == 6600
+    (cfgdir / "homeos.yaml").write_text('mpd: {host: "10.0.0.9"}\n', encoding="utf-8")
+    config._apply()
     assert config.MPD_HOST == "10.0.0.9"
 
 
@@ -96,3 +96,36 @@ def test_broken_yaml_falls_back_to_defaults(cfgdir):
     assert config.GOTIFY_TOKEN == "" and config.GOTIFY_URL == ""
     assert config.MPD_PORT == 6600
     assert config.ASR_HOST == "eastasia.stt.speech.microsoft.com"
+
+
+def test_unknown_key_is_reported_but_other_fields_work(cfgdir):
+    """拼错的键要报出来，但不能连累同一段里写对的值。"""
+    (cfgdir / "homeos.yaml").write_text('mpd: {host: "10.0.0.9", prot: 6600}\n', encoding="utf-8")
+    config._apply()
+    assert config.MPD_HOST == "10.0.0.9"
+    assert any("prot" in problem for problem in config.PROBLEMS)
+
+
+def test_bad_port_falls_back_without_losing_host(cfgdir):
+    (cfgdir / "homeos.yaml").write_text('mpd: {host: "10.0.0.9", port: "abc"}\n', encoding="utf-8")
+    config._apply()
+    assert (config.MPD_HOST, config.MPD_PORT) == ("10.0.0.9", 6600)
+    assert any("port" in problem and "整数" in problem for problem in config.PROBLEMS)
+
+
+def test_unknown_section_is_reported(cfgdir):
+    (cfgdir / "homeos.yaml").write_text('gotfy: {url: "x"}\nmpd: {host: "1.2.3.4"}\n')
+    config._apply()
+    assert config.MPD_HOST == "1.2.3.4"
+    assert any("gotfy" in problem for problem in config.PROBLEMS)
+
+
+def test_loose_token_permissions_are_reported(cfgdir, monkeypatch):
+    """令牌是 0600 之外还能被同机其他用户读到：不阻断，但要提醒。"""
+    token = cfgdir / "server.token"
+    token.write_text("a" * 32, encoding="utf-8")
+    token.chmod(0o644)
+    monkeypatch.setattr(config, "TOKEN_FILE", token)
+    config._apply()
+    assert config.TOKEN == "a" * 32
+    assert any("权限" in problem for problem in config.PROBLEMS)

@@ -129,4 +129,4 @@ def test_route_reports_503_when_beszel_down(monkeypatch):
     monkeypatch.setattr(metrics, "snapshot", boom)
     r = TestClient(create_app()).get("/api/metrics")
     assert r.status_code == 503
-    assert "连不上" in r.json()["detail"]
+    assert "连不上" in r.json()["error"]["message"]
