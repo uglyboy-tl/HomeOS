@@ -12,8 +12,8 @@
 | 文件 | 改完什么时候生效 |
 |---|---|
 | `mijia.yaml` | 下一次请求（按 mtime 重读） |
-| `agents.yaml` `agents.md` | 刷新页面看到新标签；**已起着的会话仍用旧 prompt**，点「新对话」才换 |
-| `pi-models.json` `pi-settings.json` | 同上，pi 启动子进程时读；软链到 `/data/pi/`，不用重启容器 |
+| `agents.yaml` `agents.md` | 下一次请求就生效；**已起着的会话在下一轮开始时**用新 prompt 重建进程（同一会话 id，上下文不丢），日志有一行 |
+| `pi-models.json` `pi-settings.json` | 同上；软链到 `/data/pi/`，不用重启容器 |
 | `homeos.yaml` | 重启容器（服务接入信息只在启动时读一次） |
 | `server.token` | 重启容器 |
 

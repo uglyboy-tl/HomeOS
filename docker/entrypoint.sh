@@ -31,4 +31,8 @@ if [ "${HOMEOS_DEV:-0}" = 1 ]; then
   RELOAD=(--reload --reload-dir "$ROOT/app" --reload-dir "$ROOT/config" --reload-include='*.yaml')
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level info "${RELOAD[@]}"
+# 容器只在 Traefik 后面：信任内网来源的转发头，scheme 才是 https、日志里才是真实客户端 IP；
+# 不写 "*"——万一有人把端口发布到宿主，任何 LAN 客户端都能伪造 X-Forwarded-For/Proto
+exec uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level info \
+  --proxy-headers --forwarded-allow-ips="127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" \
+  "${RELOAD[@]}"
