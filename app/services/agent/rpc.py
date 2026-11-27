@@ -237,6 +237,8 @@ class RpcClient:
         proc = self._proc
         if proc is None or proc.returncode is not None or proc.stdin is None:
             raise PiError("pi 不在运行")
+        if proc.stdin.is_closing():
+            raise PiError("pi 的输入已经关了")
         proc.stdin.write((json.dumps(payload) + "\n").encode())
 
     async def command(self, payload: dict, timeout: float = COMMAND_TIMEOUT) -> dict:
@@ -294,15 +296,25 @@ class RpcClient:
     def kill(self) -> None:
         for task in self._readers:
             task.cancel()
-        self._readers.clear()
-        if self._proc and self._proc.returncode is None:
-            self._proc.kill()
+
+        proc = self._proc
+        if proc is None:
+            return
+        if proc.returncode is None:
+            proc.kill()
+        # 读任务被取消后管道不会自己 EOF：显式关掉，否则进程重启会漏 fd
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    stream.close()
 
     async def close(self) -> None:
         """优雅关：关 stdin 让 pi 自己收尾，超时才升级到 TERM / KILL。"""
+        tasks = list(self._readers)
         proc = self._proc
         if proc is None or proc.returncode is not None:
             self.kill()
+            await self._reap(tasks)
             return
         if proc.stdin is not None:
             with contextlib.suppress(Exception):
@@ -320,6 +332,12 @@ class RpcClient:
                 proc.kill()
                 await proc.wait()
         self.kill()
+        await self._reap(tasks)
+
+    async def _reap(self, tasks: list) -> None:
+        self._readers.clear()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def ask(text: str) -> str:

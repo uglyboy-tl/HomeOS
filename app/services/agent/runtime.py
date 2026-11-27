@@ -151,6 +151,8 @@ class Conversation:
         self._stale = False
         self._cleared = False  # 用户主动新开过会话：重启后不要又把旧 <mode>.id 接回来
         self._crashes: deque[float] = deque(maxlen=CRASH_LIMIT)
+        # 起过的客户端都要能关掉：崩溃、回收被取消时它们不在 self._client 上
+        self._clients: set[rpc.RpcClient] = set()
         self._cooldown_until = 0.0
         self._load()
 
@@ -285,10 +287,19 @@ class Conversation:
             return
         if time.monotonic() - self._last_used < EVICT_IDLE:
             return
-        client, self._client = self._client, None
-        if client is not None and client.alive:
-            await client.close()
-            log.info("模式 %s 空闲回收；下次用会按会话 id 接上", self.mode.id)
+        # 检查与关闭之间会 await：持锁重查一次，免得和刚进来的一轮抢同一个客户端
+        async with self._lock:
+            if self.busy or self._viewers:
+                return
+            client, self._client = self._client, None
+            if client is None:
+                return
+            try:
+                if client.alive:
+                    await client.close()
+                    log.info("模式 %s 空闲回收；下次用会按会话 id 接上", self.mode.id)
+            finally:
+                client.kill()  # 被取消时兜底：kill 是同步的，保证不留活进程
 
     async def close(self) -> None:
         if self._task is not None and not self._task.done() and self._client is not None:
@@ -302,6 +313,9 @@ class Conversation:
         client, self._client = self._client, None
         if client is not None:
             await client.close()
+        leftovers = list(self._clients)
+        self._clients.clear()
+        await asyncio.gather(*(one.close() for one in leftovers), return_exceptions=True)
 
     async def _run(self, text: str) -> None:
         client = self._client
@@ -408,6 +422,9 @@ class Conversation:
         client = self._client
         if client is not None and client.alive:
             return client
+        if client is not None:
+            self._client = None
+            await client.close()  # 崩溃/退出过的客户端也要关，否则管道等 GC
         spec = rpc.LaunchSpec(
             tools=self.mode.tools,
             prompt=self.mode.prompt,
@@ -422,6 +439,7 @@ class Conversation:
         except (OSError, rpc.PiError) as e:
             await client.close()
             raise rpc.PiUnavailable(f"起 pi 失败：{_friendly(str(e))}") from e
+        self._clients.add(client)
         session_id = str(state.get("sessionId") or "")
         if session_id and session_id != self._session_id:
             self._session_id = session_id

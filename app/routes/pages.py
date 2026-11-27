@@ -9,11 +9,14 @@ from ..lib.security import auth_cookie
 router = APIRouter()
 
 NO_STORE = {"Cache-Control": "no-store"}
-# 开发时也别让浏览器缓存静态资源：改完 CSS/JS 要立刻看到（安全头由 lib/headers 统一加）
-ASSET_CACHE = {"Cache-Control": "no-store" if config.DEV else "public, max-age=300"}
 
 # 固定页：加一页 = 这里加一行 + 在 web/ 放一个 html，再在首页写一个链接
 FIXED = {"home": "home.html", "mijia": "mijia.html", "agent": "agent.html"}
+
+
+def _asset_headers() -> dict:
+    """开发时也别让浏览器缓存静态资源：改完 CSS/JS 要立刻看到（安全头由 lib/headers 统一加）。"""
+    return {"Cache-Control": "no-store" if config.DEV else "public, max-age=300"}
 
 
 def _file(rel: str, headers: dict | None = None):
@@ -23,7 +26,7 @@ def _file(rel: str, headers: dict | None = None):
     full = (config.WEB_ROOT / rel).resolve()
     if config.WEB_ROOT not in full.parents or not full.is_file():
         raise HTTPException(404, "没有这个文件")
-    return FileResponse(full, headers=headers or ASSET_CACHE)
+    return FileResponse(full, headers=headers or _asset_headers())
 
 
 def _page(rel: str, request: Request):

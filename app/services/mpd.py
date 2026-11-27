@@ -38,11 +38,13 @@ class MpdConflict(MpdError):
 @contextlib.contextmanager
 def _conn():
     client = client_lib.MPDClient()
-    client.timeout = config.MPD_TIMEOUT
+    # python-mpd2 的 timeout 同时管连接与读；connect() 的 timeout 参数已弃用，只能分两段设
+    client.timeout = config.MPD_CONNECT_TIMEOUT
     try:
-        client.connect(config.MPD_HOST, config.MPD_PORT, config.MPD_CONNECT_TIMEOUT)
+        client.connect(config.MPD_HOST, config.MPD_PORT)
     except (client_lib.MPDError, OSError) as e:
         raise MpdError(f"连不上 MPD（{config.MPD_HOST}:{config.MPD_PORT}）：{e}") from e
+    client.timeout = config.MPD_TIMEOUT
     try:
         yield client
     except client_lib.CommandError as e:
