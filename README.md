@@ -37,6 +37,7 @@ Jellyfin、Immich、Miniflux 这类已有成熟 API 的服务不包一层。
 ./scripts/dev.sh restart       # 停掉再起，改过导出环境变量或依赖时用
 ./scripts/dev.sh status|log|down
 
+./scripts/release.sh patch                                # 发版演练：只看计划（要 main 且工作区干净）；--go 才改版本、提交、打 tag、推
 uv run pytest -q                                          # 322 个用例，约 16 秒，不联网
 uv run pytest -q --cov=app --cov-fail-under=95            # CI 门槛 95%，当前 96%
 uv run ruff check . && uv run ruff format .

@@ -78,6 +78,7 @@ Alpine 本地副本，功能页不得引）、页面只写 `rem` 且只用 `toke
 ```bash
 ./scripts/dev.sh up|down|restart|status|log   # 本机后台托管（agent 由请求拉起，没有常驻进程）
 ./scripts/sync.sh [--go] [--restart]                   # 默认演练；docker/ config/ 不推
+./scripts/release.sh [patch|minor|major|X.Y.Z] [--go]  # 发版：默认演练；--go 才改版本、提交、打 tag、推
 uv run pytest -q                                       # 不联网，约 16 秒
 uv run ruff check . && uv run ruff format .
 bunx @biomejs/biome@2.6.8 check --write .              # 前端 lint + 格式化（本机手动跑）
