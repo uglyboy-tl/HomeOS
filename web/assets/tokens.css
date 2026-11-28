@@ -9,10 +9,28 @@
   --bg: #fff;
   --fg: #000;
   --line: #000;
-  --fs-title: 2.6rem;
-  --fs-body: 1.8rem;
+
+  /* 字号四档：页面与各页 CSS 只从这里取，不写裸数 */
+  --fs-title: 2.6rem; /* 页面标题 */
+  --fs-lg: 2.2rem; /* 返回、顶部标签、设备行、强调 */
+  --fs-body: 1.8rem; /* 正文、状态、提示 */
+  --fs-sm: 1.6rem; /* 次要标签 */
+
+  /* 线宽三档：分隔线 / 常规边框 / 聚焦框 */
+  --bw-thin: 0.1rem;
+  --bw: 0.2rem;
+  --bw-heavy: 0.3rem;
+
+  /* 组件尺寸：足够手指点，且三页一致 */
   --gap: 1.2rem;
-  --tap: 10rem;
+  --pad: 1.6rem; /* 行内水平留白 */
+  --bar: 5.8rem; /* 顶部条、底部信息条 */
+  --tap: 12rem; /* 大卡片：两种屏都约 2cm，6 岁的手指也点得准 */
+  --tap-row: 7.2rem; /* 设备行 */
+  --tap-sm: 4.6rem; /* 图标按钮、单行输入 */
+  --icon: 2.2rem;
+  --icon-lg: 3.2rem;
+  --mark: 0.6rem; /* 左侧引文竖线 */
   --col: 15rem;
 }
 
@@ -89,11 +107,11 @@ video {
   justify-content: center;
   flex: 0 0 auto;
   align-self: flex-start;
-  min-width: 4.6rem;
-  min-height: 4.6rem;
+  min-width: var(--tap-sm);
+  min-height: var(--tap-sm);
   padding: 0 1rem;
   color: var(--fg);
-  font-size: 2.8rem;
+  font-size: var(--fs-lg);
   font-weight: 700;
   line-height: 1;
   text-decoration: none;
@@ -122,6 +140,15 @@ video {
   flex: 1;
 }
 
+/* 首页的能力异常带：只在有东西坏了的时候进 DOM，正常态一个字都不画 */
+.hw-alert {
+  margin: 0;
+  padding: calc(var(--gap) / 2) var(--gap);
+  border: var(--bw) solid var(--line);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -133,7 +160,7 @@ video {
   background: var(--bg);
   color: var(--fg);
   text-decoration: none;
-  border: 0.25rem solid var(--line);
+  border: var(--bw) solid var(--line);
 }
 .card:active {
   background: var(--fg);
@@ -159,9 +186,52 @@ video {
 }
 
 .card .icon {
-  width: 3.2rem;
-  height: 3.2rem;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
   stroke-width: 1.6;
+}
+
+/* 顶部条：返回 + 一排等宽标签。米家与助手是同一套排法，写在这里免得各抄一遍 */
+.bar {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-height: var(--bar);
+  border-bottom: var(--bw) solid var(--line);
+}
+.bar .back {
+  align-self: stretch;
+  min-width: 6.6rem;
+  min-height: auto;
+  padding: 0;
+  border-right: var(--bw-thin) solid var(--line);
+  font-size: var(--fs-lg);
+}
+.bar-tabs {
+  display: flex;
+  flex: 1 1 auto;
+}
+.bar-tabs button {
+  flex: 1;
+  border: 0;
+  border-right: var(--bw-thin) solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+.bar-tabs button:last-child {
+  border-right: 0;
+}
+.bar-tabs button[aria-current="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* Alpine 的 x-cloak 靠这条生效（Alpine 自己不带）：缺了就是初始化前先闪一帧 */
+[x-cloak] {
+  display: none !important;
 }
 
 /* 所有可点元素：去掉双击缩放的 300ms 等待，墨水屏上这 300ms 能感觉到 */
@@ -170,6 +240,6 @@ video {
 }
 
 :where(a, button, textarea, input):focus-visible {
-  outline: 0.3rem solid var(--fg);
-  outline-offset: -0.3rem;
+  outline: var(--bw-heavy) solid var(--fg);
+  outline-offset: calc(var(--bw-heavy) * -1);
 }

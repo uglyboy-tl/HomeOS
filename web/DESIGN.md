@@ -1,205 +1,155 @@
 # 前端设计规范（`web/`）
 
-只写**这个项目里相对共通、且不显然**的约定。样式变量看 `assets/tokens.css`，
-设备与硬约束看根目录 `AGENTS.md`。新页面照这份做，不对劲的地方先改这里再改代码。
+写给未来写页面的人（和 agent）。这里只讲**为什么这样画**，不讲某个页面怎么实现；
+具体写法看 `assets/page.template.html`，能用的数值看 `assets/tokens.css`。
 
-目标只有一个：**墨水屏上少刷几次**。整屏刷新约 300-500ms 且会闪黑，
-所以下面每一条都在回答同一个问题——"这次能不能不画"。
+## 0. 先认清这块屏
 
----
-
-## 1. 三条基础原则
-
-### P1 首帧用浏览器缓存，第二帧用服务端真值
-
-打开页面时先按上次的结果画（localStorage，同步、0 网络），再拉新数据覆盖。
-**两边通常一致，所以大多数时候用户只看到一次刷新。**
-
-两个现成例子：`assets/mijia.js`（有响应式状态，用 Alpine + `$persist`）、
-`assets/home.js`（只是追加几张卡片，用原生 DOM + 手写 localStorage）。
-**缓存原则一样，是否引入 Alpine 看页面有没有响应式状态**：没有就别引。
-
-落地的写法（米家）：
-
-```js
-// 注册在 alpine:init 里，$persist 必须在 data 工厂求值，否则拦截器不生效
-Alpine.data('mijiaPanel', () => ({
-  cache: Alpine.$persist({ ts: 0, devices: null, values: null }).as('mijia/v1'),
-  ...
-```
-
-```js
-// x-init 里（不是工厂里！）读缓存，一次赋值成型——先建空对象再填就是两次重绘
-if (!this.rooms.length && this.cache.devices && Date.now() - this.cache.ts < CACHE_MAX_AGE) {
-  this.devicesPayload = this.cache.devices;
-  this.values = this.cache.values;
-  this.rooms = buildRooms(this.cache.devices, this.cache.values);
-}
-```
-
-规则：
-
-- 缓存键带版本（`mijia/v1`、`home/pages/v1`），数据结构一变就改版本号，旧缓存自动作废。
-- 缓存有 TTL（都用 12 小时），过期当没有；读不到/坏了当没有。
-- 只写属性、不整体替换被 `$persist` 包住的对象，否则 proxy 被换掉、之后不再落盘。
-- **浏览器状态（停在哪个房间、展开/收起之类）单独用小 key**（`mijia/room`），
-  不塞进带 TTL 的数据缓存：数据过期了，偏好还要在。
-- 服务端也有缓存（米家：开关 3s、温湿度 300s、烟感 900s），前端缓存要跟它对齐思路，
-  不要比服务端"更旧"。
-- **请求粒度 = 页面上看得到的那一块**：米家只拉当前房间（`/api/mijia/state?room=客厅`），
-  切房间才拉那一间；同一间房里的设备由后端并行读（一次往返）。后端扛得住并发，
-  但客户端不要为了"提前热身"去拉看不见的房间。
-
-### P2 只改变化的字段
-
-数据回来时**不要重建列表、不要替换数组/对象**，就地改字段；字段没变就不赋值，
-Alpine 连那个文本节点都不会碰。
-
-```js
-if (sw.on !== next) sw.on = next;        // 变了才写
-if (sensor.text !== view.text) sensor.text = view.text;
-```
-
-配套的三条纪律：
-
-- `x-for` 的 `:key` 必须用稳定 id（设备 id、房间名），换 key 等于整块重建。
-- 结构真的变了（设备增删）才重建 `rooms`，重建时用已有 values 播种，避免出现一排默认值。
-- **列表项与行内字段**不用 `x-show` 切换 `display`（会重排）。让元素一直在、文本为空就不占宽度：
-  `<span class="sub" x-text="sensor.sub || ''">`。
-
-改完可以量一下：`MutationObserver` 观察容器，**数据没变时刷新应该是 0 次变更**，
-改一个开关应该是 2 次（class + 文字）。
-
-### P3 失败即降级，不假装正常
-
-拉数据失败时：**继续显示缓存值 + 停用写操作 + 明说原因**。
-米家的做法是三条一起：顶部黑条「离线：显示上次状态，操作已停用」、
-按钮上挂原生 `disabled`（`x-bind:disabled`）、点击处理里再兜一层。
-
-不做的：只弹一个一闪而过的提示然后继续能点（会拿旧数据乱写设备）。
-
----
-
-## 2. Alpine 的用法（只用这些）
-
-| 用什么 | 说明 |
+| 事实 | 后果 |
 |---|---|
-| `x-data` / `x-init` | 一个组件，结构在 HTML，逻辑在 `assets/<页>.js` |
-| `x-for` + `:key` | 列表一律走它，`:key` 必须稳定 |
-| `x-text` / `:class` / `:hidden` / `:aria-*` / `@click` | 够用，不需要更多 |
-| `$persist` | 浏览器缓存，见 P1；**小偏好另开一个 `.as()` 键** |
+| 反射式、无背光、1-bit 或 16 级灰且灰阶不等距 | 只有黑与白可信，文字必须纯黑压纯白 |
+| 一次绘制 = 一次可见的刷新，整屏刷新 200–800ms 且有闪 | 绘制次数与绘制面积都是预算，不是免费操作 |
+| 脏区代价 = 变化的**外接矩形**，与变了几个像素无关 | 会变的东西要聚在一起，别散落在屏幕两端 |
+| 面板波形决定刷新，页面无法请求局部刷新 | 只能靠"少改 DOM"去间接缩小脏区 |
+| 读者常常在一米外，且包含一个 6 岁小孩 | 字大、目标大、信息少，宁少勿小 |
+| 浏览器不会替你关动画（EinkBro 只关自己的转场） | 动画/过渡必须页面自己清零 |
 
-- **不引其它 Alpine 插件**，不用 `x-transition`（零动画是硬约束）；`x-show` 只用于
-  “整个提示条出现 / 消失” 这种本来就要改变布局的地方（见 P2）。
-- **vendor 是本地副本**，不走 CDN：`assets/vendor/alpine.min.js`（3.14.9，gzip 16KB）、
-  `assets/vendor/alpine-persist.min.js`（同版本）。升级 = 替换同名文件 + 改这份文档的版本号。
-- **脚本顺序不能动**：
+## 1. 七条原则
 
-```html
-<script defer src="/assets/vendor/alpine-persist.min.js"></script>
-<script defer src="/assets/<页>.js"></script>            <!-- 注册 alpine:init 监听 -->
-<script defer src="/assets/vendor/alpine.min.js"></script>
-```
+**一、每一次绘制都是打扰。**
+能不动就不动：文本没变不写 DOM，列表没变不重建，状态没变不重画。
+判断标准不是"改得多不多"，而是"屏幕上有多少矩形区域变了"。
 
-`alpine.js` 一执行就立刻 `start()`（defer 脚本跑在 `readyState=interactive`），
-排在它后面的注册都会晚一步，组件名解析不到（控制台会报 `xxx is not defined`）。
+**二、先占位，再填字。**
+布局与内容分两步：先用固定高度把位置留出来，再往里写值。
+高度不跳 = 只重绘那一块；高度跳一次 = 整页跟着重排。
+填充方向也固定：**白底填黑字**，不要黑底挖白字（后者是残影与全刷的主因）。
 
----
+**三、没有颜色，状态只能走三条通道。**
+文字（优先，一句话说清"失败，30 秒后重试"）→ 形状（边框、实心块、双线）→ 位置（排序、分组）。
+反色只给**小块、高价值**的地方（选中的标签、确认按钮、状态徽章）；
+整行或整屏反白换来的辨识度，不值得那张残影。
 
-## 3. 文件与页面结构
+**四、不做动画，也不假装自己在动。**
+没有过渡、没有骨架 shimmer、没有无限旋转的 loading。
+"正在工作"用静态图形 + 三个字；超过一次刷新的等待，用文字说明还要多久或能做什么。
+
+**五、一屏一页。**
+不滚动、不分页器、不超过 6 个可点目标；翻页优于滚动。
+塞不下的第一反应是**减内容**，不是缩字号，也不是加滚动条。
+
+**六、写什么就是什么。**
+没读到就说没读到，别显示成"关"；写成功要读回确认，没确认就不假装成功；
+未知（还没拉过）与失败（拉过但错了）必须用不同表现。
+
+**七、代码要能被下一个人改。**
+零构建、无 CDN、页面是一份能单独拷走打开的 HTML；
+一页一个 HTML + 可选同名 CSS/JS；不放共享运行时（除非真有响应式列表，见 §4）。
+
+## 2. 排版与尺寸
+
+只用 `tokens.css` 的变量，**不写裸数值**。四档字号够用：
+
+| 用途 | 变量 | 备注 |
+|---|---|---|
+| 页面标题 | `--fs-title` | 一页一个 |
+| 返回、标签、行主文本、强调 | `--fs-lg` | 与顶层标签同号 |
+| 正文、状态、提示 | `--fs-body` | 不小于 1.8rem，这是下限不是上限 |
+| 次要标签 | `--fs-sm` | 只给标签，不给要读的句子 |
+
+- 线宽三档：`--bw-thin` 分隔、`--bw` 边框、`--bw-heavy` 聚焦；**不用灰线**，实线比灰线稳。
+- 可点目标：`--tap`（卡片）≈ 2cm、`--tap-row`（列表行）、`--tap-sm`（图标按钮）≥ 4.6rem —— 6 岁的手指按 2cm 设计。
+- 会变的数字加 `font-variant-numeric: tabular-nums`：9 → 10 宽度不变，邻居不重排。
+- 行宽不要超过约 30 个汉字（`ch` 级别限制）；一行太长在无滚动的屏上很难找到下一行。
+
+## 3. 图形与文案
+
+判断顺序：**一个形状 + 一次点击能说清的事，就别写字。**
+
+- 图标用 `/assets/icons.svg` 的 symbol（`<use>`）；内联路径等于每页复制一份 `d`。
+- 描边、直角端点，不填色、不圆角：低分辨率下圆角与细线糊成一团。
+- 装饰性图形 `aria-hidden="true"`，不承载语义。
+- 能写的字只有四类：对话正文与输入、数字与单位、专名、一行以内的错因。
+- 禁用态与缺失态优先"干脆不显示"；必须在就写清原因，不要用透明度表达不可用（屏上没有"淡"这回事）。
+
+## 4. 页面结构与代码
 
 ```
 web/
-  home.html  mijia.html  agent.html      固定页（人能改，路由写死在 app/routes/pages.py 的 FIXED）
-  pages/<slug>/index.html + meta.json    功能页（agent 写，一个目录一页）
-  assets/
-    tokens.css                           唯一皮肤：变量、排版、宫格、返回按钮
-    <页>.css  <页>.js                     页面自己的样式与逻辑，与同名 html 对齐
-    vendor/                              第三方本地副本（alpine）
-    icons.svg  page.template.html        图标 sprite、功能页起手模板
+  home.html  mijia.html  agent.html     固定页（人写，路由在 app/routes/pages.py 的 FIXED）
+  pages/<slug>/index.html + meta.json   功能页（agent 写，一目录一页，起手照 page.template.html）
+  assets/tokens.css                     唯一皮肤；其余 <页>.css / <页>.js 与同名 html 对齐
+  assets/icons.svg  page.template.html  assets/vendor/（第三方本地副本，只有 Alpine）
 ```
 
-- 页面 = 一份完整 HTML + 可选同名 CSS/JS，**能单独打开**；服务端不往页面里塞内容。
-- 页面之间不互相链，左上角「返回」自己写（`<a class="back" href="/">←</a>`）。
-- 样式只用 `tokens.css` 的变量和 rem；`px` 宽度会在另一种尺寸的屏上溢出。
-- 首页只有固定页的卡片是手写的，功能页那张卡片由 `home.js` 追加（带 `data-slug`），
-  固定页卡片不参与 diff。
+- 语义优先：跳转用 `<a href>`，动作用 `<button type="button">`，选中用 `aria-current="true"`（容器 `role="group"` + `aria-label`），真禁用用原生 `disabled`。写一半的 `role` 比不写更糟。
+- 监听挂容器、用 `e.target.closest()` 分发：页面会重绘，逐个绑必然漏。
+- 视口：`min-height: 100dvh`、底部留 `max(var(--gap), env(safe-area-inset-bottom, 0px))`、不写 `user-scalable=no`。
+- 静态资源改动时给 HTML 里的引用加 `?v=N`（EinkBro 对子资源缓存极顽固）。
 
----
+**什么时候可以用 Alpine**：只有当页面需要"响应式列表 + 局部状态"时才引（固定页、本地副本）。纯追加内容用原生 DOM。
 
-## 4. 性能预算
+引 Alpine 时三条硬约束：
 
-| 项 | 预算 |
+1. 脚本顺序不能变——`persist` → 本页 JS → `alpine`；`alpine` 一执行就 `start()`，之后再注册 `alpine:init` 不生效。
+2. `$persist` 必须 `.using()` 一个带 try/catch 与大小上限的 storage：插件内部对 `JSON.parse` 与 `setItem` 都没有保护，缓存写坏或超配额会直接中断组件初始化。
+3. `init()` 里建的定时器与监听，`destroy()` 里必须全部收回；`[x-cloak]` 的 CSS 已在 `tokens.css`，直接用即可。
+
+## 5. 数据与刷新
+
+**三拍**：进页面先用缓存把上次的内容画出来 → 再向服务器对账（变了才重绘）→ 还在工作的继续跟随到结束。
+缓存的是**屏幕上那一屏**（已格式化好的视图），不是接口原文；对账只改变化的字段。
+
+| 场景 | 规矩 |
 |---|---|
-| 单页自己的 JS（gzip） | ≤ 10KB（米家约 5KB） |
-| vendor（gzip） | 16.9KB，只有米家页引，浏览器会缓存 |
-| 轮询 | ≥ 60 秒，且只在页面可见时（`document.hidden`） |
-| 一屏 | 不滚动，行高固定 |
+| 轮询 | ≥ 60s，`document.hidden` 时不跑；回来时先补一次 |
+| 推送 | 服务端限流 ≤ 4 帧/秒——再快面板只会永远停在过渡中 |
+| 写操作 | `PUT/POST` 后**读回确认**再改界面；返不回预期值就如实说失败 |
+| 未拉过 vs 拉失败 | 前者显示"…"（可点、点了重拉），后者显示"读不到"（不可点） |
+| 整页失败 | 旧值照旧显示 + 一行离线原因 + 一个能点的重试入口；不要静默禁用一整屏 |
+| 恢复 | 失败后 10 秒自动重试一次，别等下一轮 120 秒 |
 
-代价参考：Alpine 初始化在桌面 12-19ms、折算到 inkPalm 约 70-190ms，45 个节点的 `x-for`
-渲染 1-4ms（设备上 10-40ms）。这部分藏在整屏刷新里，感知不到；**真正要盯的是重绘次数**。
+## 6. 验收
 
----
+1. 有缓存时，导航后 50–200ms 内页面内容就完整可见（不是空白等网络）。
+2. 数据没变时 `MutationObserver` 记 0 次变更；改一个状态记 1–2 次。
+3. 断网 / 后端 500：旧值仍在、有原因、有重试入口，且这状态进了缓存。
+4. 一屏不滚动；可点目标 ≥ `--tap` / `--tap-sm`；没有为塞内容而调小字号。
+5. 页面上没有任何动画、过渡、hover 效果；屏幕上的数字宽度不随值变化跳动。
 
-## 5. 新页面检查清单
+## 7. 参考：该按哪套规范做
 
-- [ ] `<head>` 里三件事：viewport、`color-scheme: light`、`tokens.css`
-- [ ] 需要数据时：缓存键带版本、TTL、首帧一次赋值；有响应式状态才引 Alpine
-- [ ] 列表 `:key` 用稳定 id；数据更新只改字段；列表项与行内字段不用 `x-show`
-- [ ] 用户偏好（当前房间等）单独存一个 key，不进数据缓存
-- [ ] 失败时：显示旧值 + 停用操作 + 一行原因
-- [ ] 轮询 ≥ 60s 且只在可见时
-- [ ] 自己写返回按钮，不链其它页面
-- [ ] 用浏览器量一次：数据没变时刷新应产生 0 次 DOM 变更
+有分歧时按这个顺序定：**物理事实（§0）> 可访问性（WCAG/ARIA）> 墨水屏专项指南 > 通用 Web 规范 > 个人品味**。
+找不到直接答案时按 §1 的七条原则推，推完把结论回写进本文档（一句 + 出处）。
 
----
+### 通用 Web（Google 系为主）
 
-## 6. 踩过的坑
+- **[web.dev](https://web.dev/)** — Google 官方的 Web 质量指南（性能、可访问性、HTML/CSS 实践）。拿它定“什么时候该动 DOM”“静态资源怎么不拖慢首屏”，**不拿它的 Lighthouse 分数当目标**（我们只有一种屏、一种网络）。
+- **[GoogleChrome/modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance)** — Google 出的前端最佳实践仓库，已装成本仓的 `.agents/skills/modern-web-guidance`。**写任何页面前先查一遍**：弹框/菜单/表单校验/表格/滚动/无障碍都有原生做法，手写 JS/CSS 往往更差。
+  - 例外：它的动效与“流畅过渡”条目在墨水屏上不适用，本文 §1 第四条优先。
+- **[MDN Web Docs](https://developer.mozilla.org/zh-CN/docs/Web)** — 行为与 API 的唯一真相：Page Visibility（后台节流）、Storage 配额（5MiB 与 `QuotaExceededError`）、`EventSource`/`WebSocket`。
+- **[WCAG 2.2 快速索引](https://www.w3.org/WAI/WCAG22/quickref/)** 与 **[ARIA Authoring Practices](https://www.w3.org/WAI/ARIA/apg/)** — 语义角色、`aria-current` / `aria-pressed` 的正确用法、对比度、触摸目标（§2.5.8 是 24px 下限，44px 是 AAA，别把 44 当标准）。近年新增的 `:focus-visible`、`prefers-reduced-motion`、`dialog`/`popover` 都在这里。
+- **Material 3 / Apple HIG** — 只借**间距与层级**两件事；动画、色彩体系、动态过渡一律不借（理由见下方的 e-paper 设计系统研究：它们“恰好放大 e-paper 的短板”）。
 
-- **`$persist` 的时机**：工厂里读到的是默认值（拦截器还没应用），必须在 `x-init` 里读；
-  整体替换被持久化的对象会让 proxy 失效，只改属性。
-- **`x-text` 遇 `null`**：会渲染成字符串 `"null"`，可空字段写成 `x-text="v || ''"`。
-- **`x-show`**：在列表项/行内字段上用会重排，用「空文本不占位」代替；
-  提示条这类整块出现的东西可以用。
-- **`:key` 写成数组下标**：设备增删时整块重建，墨水屏上就是一次可见的整区重画。
-- **静态资源缓存**：容器里 `max-age=300`，改完前端要么等 5 分钟，要么强刷。
-- **首屏探针**：验缓存是否生效，别用"看快不快"，直接量——导航后 50-200ms 读 `document.querySelectorAll`，
-  应该是完整内容；再看 `MutationObserver` 计数，数据没变应为 0。
+### 排版
 
-## 7. 语义：能用原生就用原生
+- **[Practical Typography](https://practicaltypography.com/)**（免费在线书）— 行宽、行高、字距、强调手段的判断标准。对应到我们：行宽上限、正文行高 1.35–1.5、强调用字重而不是斜体。
+- **[Refactoring UI](https://www.refactoringui.com/)**（付费）— 视觉层级靠尺寸/字重/留白而不是颜色。单色屏上这条恰好是唯一可用的手段。
 
-按 `modern-web-guidance` 的 html 指南修过的几条，新页面照抄：
+### 墨水屏专项
 
-- **切视图用 `<button>` + `aria-current`，别用半套 `role="tab"`**。完整的 tab 模式要求
-  `aria-controls`、roving `tabindex`、方向键，我们都没有；写一半比不写更糟。
-  容器用 `role="group"` + `aria-label`，当前项 `aria-current="true"`（其余不写这个属性）。
-- **可点元素角色要对**：同页内动作用 `<button>`，跳转用 `<a href>`。
-- **列表用 `<ul>` / `<li>`**：首页宫格就是「一组页面的链接」，所以是 `ul` + `li` + `a`。
-- **禁用用原生 `disabled`**，不要 `aria-disabled` + `pointer-events` 组合；外观我们自己用 CSS 保住
-  （墨水屏上是黑白，别让 UA 灰掉）。
-- **装饰性 SVG** 一律 `aria-hidden="true"`，图标按钮自己给 `aria-label`；`<use>` 引的 sprite
-  必须同源，`viewBox` 放在 `<symbol>` 上，外层 `<svg>` 给尺寸（CSS 也能给，属性只是兜底）。
-- 可点元素统一 `touch-action: manipulation`，去掉双击缩放的 300ms 等待。
-- 不写 `maximum-scale` / `user-scalable=no`，不关页面缩放。
+- **[Designing for e-ink](https://epaper-components.dev/guides/designing-for-eink/)** — 对比度是物理预算（反射屏 12:1–16:1 且随环境光衰减）、16–18px 是正文下限不是上限、48px 触摸下限、分页优于滚动、状态只能走文字/形状/位置。
+- **[Partial refresh](https://epaper-components.dev/guides/partial-refresh/)** — 脏区代价 = 变化的**外接矩形**；更新快于约 4Hz 只会永远停在半过渡；每 10–50 次局部刷新该补一次全刷；`innerHTML` 重建是病态情况（脏区按整块算）。本文 §1 前两条与 §5 的 4 帧/秒上限都出自这里。
+- **CHI 2026《A Dedicated E-Paper Design System for Mobile Phones》**（[论文](https://dl.acm.org/doi/full/10.1145/3772318.3791459)，成果即 [Mudita Mindful Design](https://mudita.com/developers/)）— 目前唯一成体系的移动 e-paper 设计系统：等高列表项、分隔线位置固定以限残影、禁用态能省就省、确认反馈用反色。
+- **[EinkBro 源码](https://github.com/plateaukao/einkbro)** — 看浏览器层面做了什么：只关 Activity 转场、只做图片抖色优化，**没有**页面级动画抑制，也没有 `prefers-reduced-motion` 注入。结论：别指望浏览器替你关动画。
+- **E Ink 官方没有公开的 UI 设计指南**，Onyx/Kobo/Kindle 也没有。别再去找，这四份就是全部可信材料。
 
-## 8. 助手页（/agent）与 /api/agent/*
+### 触摸与儿童
 
-页面只做三件事：画一轮、发一句、跟着看到结束；消息顺序、错误措辞、会话生命周期都在后端。
+- **[NN/g: Children's UX: Physical Development](https://www.nngroup.com/articles/children-ux-physical-development/)** — 4–6 岁建议 **2cm×2cm** 触摸目标（成人 1cm 的 4 倍）。`--tap` 按这个定。
+- 想再放宽时看 WCAG 2.5.5（44×44 AA/AAA 之争）与 Fitts 定律，不要凭手感。
 
-- **显示只有四种态**：提示语 / 「正在工作…」/ 正文 / 错误。chat 没有思考链，pages/device 会长时间
-  思考或调工具，页面不区分"思考"和"干活"。
-- **只留最近一轮**：新一轮直接替换旧的（不用清屏再画）。
-- **持久化**：`agent/mode` 记模式、`agent/turn/<mode>` 记每个模式最后一轮；进来先画缓存，
-  再对服务器，内容一致时**零重绘**。
-- **逐字**：SSE `/api/agent/stream`（服务端限流 4 次/秒）+ 轮询兜底；`done` 但没正文的帧不算结束。
-- **软键盘**：字号用的视口高度在加载时钉成 `--vh-px`（`agent.html` 里的内联脚本，公式仍只在 `tokens.css`），
-  键盘弹出只压高度不改字号；`.agent` 锁 `100dvh` + `overflow:hidden`，长对话由 `.agent-log` 自己滚。
-- **测试台接口**（验证 opencode 配置用）：
+### 我们用的技术
 
-  ```
-  GET  /api/agent/info?mode=     绑定的 agent 与模型
-  GET  /api/agent/trace?mode=    消息轨迹（时间正序，带 model/tokens/cost/finish/error_raw）
-  POST /api/agent/ask            {input,prompt,timeout,speak} 给程序用：交一段内容拿一段解读
-  POST /api/agent/bind           {mode,agent} 临时换 agent（重建会话）
-  POST /api/agent/model          {mode,providerID,id,variant} 换模型
-  ```
+- **[Alpine.js 官方文档](https://alpinejs.dev/)** — `x-for` 必须单根 `<template>` + 稳定 `:key`；`x-show` 只切 `display`、`x-if` 真删 DOM（会跑 `destroy()`）；`[x-cloak]` 的 CSS 要自己写（已在 `tokens.css`）。
+- **persist 插件[源码](https://github.com/alpinejs/alpine/blob/main/packages/persist/src/index.js)** — 恢复发生在 data 被接管时（工厂里读到的是默认值）；`storageGet`/`storageSet` **没有** try/catch，所以必须 `.using()` 自己的 storage。

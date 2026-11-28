@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <title>家里</title>
-<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/tokens.css?v=1">
 </head>
 <body>
 <main class="page">
   <h1 class="page-title">家里</h1>
+  <!-- 能力异常时才出现的单行提示：内容由 home.js 写，正常态保持 hidden -->
+  <p class="hw-alert" id="hw-alert" hidden></p>
   <ul class="grid" id="hw-grid">
     <li>
       <a class="card" href="/mijia">
@@ -25,6 +27,6 @@
     </li>
   </ul>
 </main>
-<script src="/assets/home.js" defer></script>
+<script src="/assets/home.js?v=5" defer></script>
 </body>
 </html>

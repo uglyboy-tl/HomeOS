@@ -9,23 +9,17 @@
   /* 把当前视口高度记成 --vh-px：软键盘弹出会改 100vh，这个值不变，字号因此不缩 */
   document.documentElement.style.setProperty('--vh-px', window.innerHeight + 'px');
 </script>
-<link rel="stylesheet" href="/assets/tokens.css">
-<link rel="stylesheet" href="/assets/agent.css?v=17">
+<link rel="stylesheet" href="/assets/tokens.css?v=1">
+<link rel="stylesheet" href="/assets/agent.css?v=29">
 </head>
 <body>
 <main class="agent">
-  <div class="agent-modes">
+  <div class="agent-modes bar">
     <a class="back" href="/" aria-label="返回">←</a>
-    <div class="agent-tabs" role="group" aria-label="模式">
-      <button type="button" data-mode="chat" aria-current="true">聊天</button>
-      <button type="button" data-mode="design">设计</button>
-      <button type="button" data-mode="device">高级</button>
-    </div>
+    <div class="agent-tabs bar-tabs" role="group" aria-label="模式"></div>
   </div>
 
-  <div class="agent-log" role="log" aria-live="polite">
-    <p class="agent-empty">聊天模式：问什么答什么，不改页面。</p>
-  </div>
+  <div class="agent-log" role="log" aria-live="polite"></div>
 
   <form class="agent-say" autocomplete="off">
     <button type="button" class="agent-icon agent-new" aria-label="新对话">
@@ -44,11 +38,13 @@
       </button>
     </div>
     <button type="submit" class="agent-icon agent-send" aria-label="发送">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      <svg class="icon icon-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12"/></svg>
     </button>
   </form>
 </main>
-<!-- 改 agent.js 时把 v 加一：EinkBro 对子资源缓存很顽固，不换 URL 会跑旧代码 -->
-<script src="/assets/agent.js?v=17" defer></script>
+<!-- 首帧由 agent.js 起来后画：与米家页同等程度的空一下，不为抢这一帧复制一套渲染 -->
+<!-- 改 agent.js / agent.css 时把 v 加一：EinkBro 对子资源缓存很顽固，不换 URL 会跑旧代码 -->
+<script src="/assets/agent.js?v=30" defer></script>
 </body>
 </html>

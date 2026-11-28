@@ -10,43 +10,8 @@
   overflow: hidden; /* 页面本身不滚，只有对话区滚 */
 }
 
-/* 顶部：返回 + 三个模式，和米家页同一套排法 */
-.agent-modes {
-  display: flex;
-  align-items: stretch;
-  min-height: 5.8rem;
-  border-bottom: 0.2rem solid var(--line);
-  flex: 0 0 auto;
-}
-.agent-modes .back {
-  align-self: stretch;
-  min-width: 6.6rem;
-  min-height: auto;
-  padding: 0;
-  border-right: 0.1rem solid var(--line);
-  font-size: 2.2rem;
-}
-.agent-tabs {
-  display: flex;
-  flex: 1 1 auto;
-}
-.agent-tabs button {
-  flex: 1;
-  border: 0;
-  border-right: 0.1rem solid var(--line);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 2.2rem;
-  font-weight: 700;
-}
-.agent-tabs button:last-child {
-  border-right: 0;
-}
-.agent-tabs button[aria-current="true"] {
-  background: var(--fg);
-  color: var(--bg);
-}
+/* 顶部：返回 + 模式标签，排法与米家页共用 tokens.css 的 .bar */
+
 /* 对话区：唯一允许滚动的地方（聊天内容会超过一屏） */
 .agent-log {
   flex: 1 1 0; /* 基准 0：内容再多也不会把这一块撑高 */
@@ -73,7 +38,7 @@
   gap: calc(var(--gap) / 2);
   padding: var(--gap);
   padding-bottom: max(var(--gap), env(safe-area-inset-bottom, 0px));
-  border-top: 0.2rem solid var(--line);
+  border-top: var(--bw) solid var(--line);
   flex: 0 0 auto;
   align-items: flex-end; /* 输入框长高时两侧按钮仍贴底 */
 }
@@ -84,7 +49,7 @@
   min-width: 0; /* 少了它，textarea 的固有宽度会把整行顶出屏幕 */
   display: flex;
   align-items: flex-end; /* 麦克风始终贴在右下角 */
-  border: 0.2rem solid var(--line); /* 边框在容器上：麦克风是子元素，不会压掉边 */
+  border: var(--bw) solid var(--line); /* 边框在容器上：麦克风是子元素，不会压掉边 */
   background: var(--bg);
 }
 
@@ -92,7 +57,7 @@
   flex: 1 1 auto;
   width: 100%; /* 跟随容器，不跟随 cols 属性 */
   min-width: 0;
-  min-height: 4.6rem; /* 与图标按钮同高；外框由 .agent-field 画 */
+  min-height: var(--tap-sm); /* 与图标按钮同高；外框由 .agent-field 画 */
   max-height: 14rem; /* 约五行，再多自己滚 */
   padding: 0.9rem 0 0.9rem var(--gap);
   border: 0;
@@ -109,7 +74,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  border: 0.3rem solid var(--fg);
+  border: var(--bw-heavy) solid var(--fg);
   pointer-events: none;
 }
 
@@ -121,8 +86,8 @@
 /* 麦克风：输入框里的最后一个子元素，靠底对齐；不压边框、不占额外一行 */
 .agent-mic {
   flex: 0 0 auto;
-  width: 4.6rem;
-  height: 4.6rem;
+  width: var(--tap-sm);
+  height: var(--tap-sm);
   display: grid;
   place-items: center;
   padding: 0;
@@ -138,22 +103,23 @@
   color: var(--bg);
 }
 
+/* 外框由 .agent-field 画，它比按钮多一道边框：高宽都算上，两边顶边才对齐 */
 .agent-say .agent-icon {
   flex: 0 0 auto;
-  min-width: 5rem;
-  min-height: 5rem;
+  min-width: calc(var(--tap-sm) + var(--bw) * 2);
+  min-height: calc(var(--tap-sm) + var(--bw) * 2);
   display: grid;
   place-items: center;
   padding: 0;
-  border: 0.2rem solid var(--line);
+  border: var(--bw) solid var(--line);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
 }
 
 .agent-say .icon {
-  width: 2.2rem;
-  height: 2.2rem; /* 麦克风与两侧图标同尺寸 */
+  width: var(--icon);
+  height: var(--icon); /* 麦克风与两侧图标同尺寸 */
 }
 
 .agent-say .agent-icon:active {
@@ -161,11 +127,28 @@
   color: var(--bg);
 }
 
+/* 发送/停止两个图标靠 is-stop 切换：hidden 属性对 SVG 不生效（它只管 HTML 元素） */
+.agent-say .icon-stop {
+  display: none;
+}
+.agent-say .agent-icon.is-stop .icon-send {
+  display: none;
+}
+.agent-say .agent-icon.is-stop .icon-stop {
+  display: block;
+}
+
+/* 停止：同一位置反色，一眼看到“可以按” */
+.agent-say .agent-icon.is-stop {
+  background: var(--fg);
+  color: var(--bg);
+}
+
 /* 对话条目：用户说的、agent 回的、出错、思考中。全用纯黑，靠边框/缩进区分 */
 .agent-say-line {
   margin: 0;
-  padding: 0.6rem var(--gap);
-  border-left: 0.6rem solid var(--fg);
+  padding: calc(var(--gap) / 2) var(--gap);
+  border-left: var(--mark) solid var(--fg);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -182,5 +165,5 @@
 .agent-error {
   margin: 0;
   padding-left: var(--gap);
-  border-left: 0.6rem double var(--fg);
+  border-left: var(--mark) double var(--fg);
 }

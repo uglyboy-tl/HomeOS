@@ -1,4 +1,4 @@
-/* 助手页：三个模式各走一个 agent（chat / pages / device），全部走后端 /api/agent/*。
+/* 助手页：模式由后端 config/agents.yaml 决定（/api/info/agent 取），页面不写死。
    只显示最近一轮；模式与各模式最后一轮存 localStorage，进来先画缓存再对账。 */
 (() => {
   const tabs = document.querySelector('.agent-tabs');
@@ -8,22 +8,30 @@
   const fresh = document.querySelector('.agent-new');
   const mic = document.querySelector('.agent-mic');
   const send = document.querySelector('.agent-send');
+  // 图标固定在 HTML 里，切换只看发送键上的 is-stop（CSS 做），这里不碰
   if (!tabs || !log || !form || !say || !fresh || !mic || !send) return;
 
-  const HINT = {
-    chat: '聊天模式：问什么答什么，不改页面。',
-    design: '设计模式：改屏幕的样子，加一页、换个颜色。',
-    device: '高级模式：动局域网里的别的设备，查服务状态。',
-  };
+  let MODES = []; // [{id,label,hint}]，来自 /api/info/agent
   const WORKING = '正在工作…';
   const POLL_MS = 800;
   const POLL_MAX = 75; // 轮询兜底最多盯 1 分钟
   const MODE_KEY = 'agent/mode';
+  const MODES_KEY = 'agent/modes'; // 标签列表缓存：进页面就能画出来，不等 /api/info/agent
   const CACHE_KEY = (m) => 'agent/turn/' + m;
+  // 后端错误码 → 「接下来怎么办」：这些码的原因从提示里看不出来
+  const ERROR_HINT = {
+    cooldown: '刚才连续崩了几次，约一分钟后再试',
+    pi_timeout: '这一轮太久了，换短一点的内容再发',
+    pi_unavailable: '助手引擎没起来，检查 config/pi-*.json 与 agents.yaml',
+    pi_crashed: '助手进程挂了，已自动重启，再发一次',
+  };
 
-  let mode = 'chat';
+  let mode = '';
   let busy = false;
   let epoch = 0; // 切模式/新对话 +1，让旧的轮询与 SSE 作废
+  let voiceTurn = false; // 这一句是语音说的
+  let pendingSpeak = false; // 这一轮结束后要念出来
+  let spokenFor = -1; // 已经念过的 epoch：同一轮只念一次
   let liveClose = null; // 当前那条 SSE 的收尾函数：作废时必须主动关，否则连接一直挂着
 
   /* 本地缓存：模式 + 每个模式最后那一轮 */
@@ -32,7 +40,7 @@
     try {
       return localStorage.getItem(key);
     } catch {
-      return null;
+      return null; // 隐私模式禁了存储就什么都不画
     }
   }
 
@@ -44,19 +52,24 @@
     }
   }
 
-  function cache(turn) {
-    write(CACHE_KEY(mode), JSON.stringify(turn));
-  }
-
-  function readTurn(m) {
-    const raw = read(CACHE_KEY(m));
-    if (!raw) return null;
+  function parse(raw) {
     try {
       return JSON.parse(raw);
     } catch {
       return null;
     }
   }
+
+  function readModes() {
+    const list = parse(read(MODES_KEY));
+    return Array.isArray(list) && list.length ? list : null;
+  }
+
+  const readTurn = (m) => (m ? parse(read(CACHE_KEY(m))) : null);
+
+  // SSE 那帧本来就是 JSON 字符串，原样存省一次序列化
+  const cache = (turn) =>
+    write(CACHE_KEY(mode), typeof turn === 'string' ? turn : JSON.stringify(turn));
 
   /* 渲染：一轮 = 用户那句 + 正文 + 状态 */
 
@@ -79,7 +92,11 @@
   }
 
   function noteOf(turn) {
-    if (turn.state === 'error') return turn.error || '助手出错了';
+    if (turn.state === 'error') {
+      const message =
+        typeof turn.error === 'string' ? turn.error : turn.error && turn.error.message;
+      return message || '助手出错了';
+    }
     // 已经有正文就不再挂「正在工作」：否则字都滚出来了，那行还赖在下面
     if (turn.state === 'thinking' && !turn.text) return WORKING;
     return '';
@@ -90,8 +107,23 @@
     el.hidden = !value;
   }
 
+  /* 说进来的念出去：只有语音发起的这一轮才调播报，失败静默（音箱没配/离线不该在页面上报错） */
+  function speak(turn) {
+    if (!pendingSpeak || spokenFor === epoch) return;
+    const text = (turn.text || '').trim();
+    if (!text) return;
+    pendingSpeak = false;
+    spokenFor = epoch;
+    fetch('/api/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }).catch(() => {});
+  }
+
   /* 内容没变就整块跳过：墨水屏上任何一次无意义重绘都是可见的一闪 */
   function show(turn) {
+    if (turn.state === 'done') speak(turn);
     if (!DOM.user) paint();
     const note = noteOf(turn);
     if (
@@ -122,16 +154,23 @@
           };
     const resp = await fetch(path, init);
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.detail || 'HTTP ' + resp.status);
+    if (!resp.ok) {
+      const failure = data.error || {};
+      const error = new Error(failure.message || data.detail || 'HTTP ' + resp.status);
+      error.code = failure.code || '';
+      throw error;
+    }
     return data;
   }
 
+  /* 忙的时候发送键变成停止键：同一个位置两个作用，不额外占地方 */
   function setBusy(on) {
     busy = on;
     say.disabled = on;
     mic.disabled = on;
-    send.disabled = on;
     fresh.disabled = on;
+    send.setAttribute('aria-label', on ? '停止' : '发送');
+    send.classList.toggle('is-stop', on); // 两个图标由 CSS 按这个类切换
   }
 
   /* 跟着这一轮走到结束：优先 SSE，EventSource 不可用或断线就退回轮询。
@@ -168,7 +207,7 @@
           return; // 半截数据丢掉，下一帧会补
         }
         show(turn);
-        write(CACHE_KEY(mode), ev.data); // 原样存，省一次序列化
+        cache(ev.data); // 原样存，省一次序列化
         if (finished(turn)) finish();
       };
       es.onerror = () => {
@@ -211,36 +250,30 @@
   }
 
   function hint() {
+    // 提示文案也是缓存来的（agent/modes）：同样的字已经在屏幕上就别重建
+    const text = hintOf(mode);
+    const only = log.childElementCount === 1 ? log.firstElementChild : null;
+    if (only && only.classList.contains('agent-empty') && only.textContent === text) return;
     reset();
     const p = node('p', 'agent-empty');
-    p.textContent = HINT[mode] || '';
+    p.textContent = text;
     log.appendChild(p);
   }
 
-  /* 进页面 / 切模式：先画缓存，再对服务器；还在工作就继续跟 */
-  async function load() {
-    const token = ++epoch;
-    const cached = readTurn(mode);
-    if (cached && (cached.question || cached.text)) show(cached);
-    else hint();
-    // 让缓存帧先真的画出来，别和网络帧挤在同一瞬间（墨水屏上就是一次"卡"）
-    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-    if (cached) await new Promise((r) => setTimeout(r, 250));
-    if (token !== epoch) return;
-    try {
-      const turn = await api('/api/agent/turn?mode=' + encodeURIComponent(mode));
-      if (token !== epoch) return;
-      // 服务器说什么就存什么：idle 也要覆盖缓存，否则下次进来又先把旧内容画一遍再擦掉
-      cache(turn);
-      if (!turn.question && turn.state === 'idle') return hint();
-      show(turn);
-      if (turn.state !== 'thinking') return;
-      setBusy(true);
-      await follow(token);
-    } catch (err) {
-      if (token === epoch) fail('读不到对话：' + err.message);
-    } finally {
-      if (token === epoch) setBusy(false);
+  function hintOf(id) {
+    const found = MODES.find((m) => m.id === id);
+    return found ? found.hint : '';
+  }
+
+  /* 标签由配置画出来，增删模式只改 config/agents.yaml */
+  function renderTabs() {
+    tabs.textContent = '';
+    for (const m of MODES) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.mode = m.id;
+      b.textContent = m.label;
+      tabs.append(b);
     }
   }
 
@@ -250,6 +283,52 @@
     for (const b of tabs.querySelectorAll('button[data-mode]')) {
       if (b.dataset.mode === mode) b.setAttribute('aria-current', 'true');
       else b.removeAttribute('aria-current');
+    }
+  }
+
+  /* 模式表就位就画（缓存和服务器回来各调一次，内容一样时把重复渲染省掉） */
+  function applyModes(list, saved) {
+    if (JSON.stringify(list) === JSON.stringify(MODES)) return;
+    MODES = list;
+    mode = MODES.some((m) => m.id === saved) ? saved : MODES[0].id;
+    renderTabs();
+    markTab();
+  }
+
+  /* 进页面 / 切模式：先画缓存（或缓存里已有的提示文案），再对服务器；还在工作就继续跟。
+     prefetched 是 boot 里跟 info 并发拿到的同一模式的快照，有就不重复请求。 */
+  async function load(prefetched) {
+    const token = ++epoch;
+    const cached = readTurn(mode);
+    const hasCache = Boolean(cached && (cached.question || cached.text));
+    if (hasCache) {
+      show(cached); // boot 里可能已经画过，没变化时 show 自己会跳
+      // 让缓存帧先真的画出来，别和网络帧挤在同一瞬间（墨水屏上就是一次"卡"）
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      if (!prefetched) await new Promise((r) => setTimeout(r, 250));
+      if (token !== epoch) return;
+    } else if (!prefetched) {
+      hint(); // 没这一轮的内容，但模式表的缓存里有提示文案，先把它画出来
+    }
+    try {
+      const turn = await (prefetched || api('/api/agent/turn?mode=' + encodeURIComponent(mode)));
+      if (token !== epoch) return;
+      // 会话换了（服务重启/新建）：屏幕上那段缓存不是这个会话的，擦掉回到初始态
+      if (cached && (cached.session || '') !== (turn.session || '')) {
+        cache(turn);
+        return hint();
+      }
+      cache(turn);
+      // 服务器没有这一轮：本地缓存留着不动，比擦成提示再画一遍省一次刷新
+      if (!turn.question && turn.state === 'idle') return hasCache ? undefined : hint();
+      show(turn);
+      if (turn.state !== 'thinking') return;
+      setBusy(true);
+      await follow(token);
+    } catch (err) {
+      if (token === epoch) fail('读不到对话：' + err.message);
+    } finally {
+      if (token === epoch) setBusy(false);
     }
   }
 
@@ -319,12 +398,12 @@
       } catch {
         return;
       }
-      if (msg.error) return stopVoice(msg.error);
-      if (msg.partial) {
-        setVoiceText(msg.partial);
+      if (msg.type === 'error') return stopVoice(msg.message || '识别失败');
+      if (msg.type === 'partial') {
+        setVoiceText(msg.text || '');
       }
-      if (msg.text !== undefined) {
-        setVoiceText(msg.text);
+      if (msg.type === 'final') {
+        setVoiceText(msg.text || '');
         stopVoice(msg.text ? '' : '没识别到内容，再说一次');
       }
     };
@@ -431,6 +510,7 @@
 
   function setVoiceText(text) {
     say.value = baseText ? baseText + text : text;
+    if (text) voiceTurn = true; // 识别出了内容：这一句算语音提问
     grow();
   }
 
@@ -467,13 +547,16 @@
     }
   });
 
-  say.addEventListener('input', grow);
+  say.addEventListener('input', () => {
+    voiceTurn = false; // 手动改过就不再算语音提问
+    grow();
+  });
 
   fresh.addEventListener('click', async () => {
     invalidate();
     setBusy(false);
     try {
-      cache(await api('/api/agent/new', { mode }));
+      cache(await api('/api/agent/new-session', { mode }));
       say.value = '';
       grow();
       hint();
@@ -483,11 +566,27 @@
     }
   });
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const text = say.value.trim();
-    if (!text || busy) return;
+  /* 停止：先断掉跟随，再让后端 abort；后端回的快照就是屏幕该显示的样子 */
+  async function stopTurn() {
+    invalidate();
+    const token = epoch;
+    try {
+      const turn = await api('/api/agent/abort', { mode });
+      if (token !== epoch) return;
+      show(turn);
+      cache(turn);
+    } catch (err) {
+      if (token === epoch) fail('停不下来：' + err.message);
+    } finally {
+      if (token === epoch) setBusy(false);
+    }
+  }
+
+  async function startTurn(text, retried) {
     setBusy(true);
+    // 只在第一轮记下“这是语音提的问”：busy 重试时不能再把它抹成 false
+    if (!retried) pendingSpeak = voiceTurn;
+    voiceTurn = false;
     const token = ++epoch;
     say.value = '';
     grow();
@@ -495,20 +594,73 @@
     DOM.user.textContent = text;
     DOM.note.textContent = WORKING;
     try {
-      show(await api('/api/agent/say', { mode, text }));
+      const started = await api('/api/agent/prompt', { mode, text });
+      if (token !== epoch) return;
+      show(started);
+      cache(started);
       await follow(token);
     } catch (err) {
-      if (token === epoch) fail(err.message);
+      // 上一轮还在跑：先停再发（这是页面自己的组合，后端只负责拒绝）
+      if (err.code === 'busy' && !retried) {
+        setBusy(false);
+        await api('/api/agent/abort', { mode }).catch(() => {});
+        return startTurn(text, true);
+      }
+      if (token === epoch) fail(ERROR_HINT[err.code] || err.message);
     } finally {
       if (token === epoch) {
         setBusy(false);
         say.focus();
       }
     }
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (busy) {
+      stopTurn();
+      return;
+    }
+    const text = say.value.trim();
+    if (!text) return;
+    startTurn(text);
   });
 
-  const saved = read(MODE_KEY);
-  mode = HINT[saved] ? saved : 'chat';
-  markTab();
-  load();
+  async function boot() {
+    // 标签与内容都先同步画（不等网络），服务器回来再对账；两个请求并发
+    const saved = read(MODE_KEY);
+    const said = readModes();
+    if (said) applyModes(said, saved);
+    const cached = saved ? readTurn(saved) : null;
+    if (cached && (cached.question || cached.text)) show(cached);
+    const infoReq = api('/api/info/agent');
+    // 预取的那一份可能永远没人 await（模式被改掉、或 info 先失败），自己兜住 rejection
+    const turnReq = saved
+      ? api('/api/agent/turn?mode=' + encodeURIComponent(saved)).catch(() => null)
+      : null;
+    let info;
+    try {
+      info = await infoReq;
+    } catch (err) {
+      fail('读不到模式：' + err.message);
+      return;
+    }
+    const fresh = info.modes || [];
+    if (!fresh.length) {
+      fail('后端没配任何模式（config/agents.yaml）');
+      return;
+    }
+    write(MODES_KEY, JSON.stringify(fresh));
+    applyModes(fresh, saved);
+    write(MODE_KEY, mode); // 下次进页面就有模式与标签可读，不必等 info
+    // 引擎起不来的话，等用户发第一句才报太晚了：先把原因画出来
+    if (info.engine && info.engine.available === false) {
+      const why = (info.engine.problems || [])[0] || info.engine.last_error;
+      fail(why ? '助手引擎没起来：' + why : '助手引擎没起来，检查 config/pi-*.json');
+      return;
+    }
+    load(mode === saved ? turnReq : null);
+  }
+
+  boot();
 })();
