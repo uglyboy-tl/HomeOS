@@ -41,7 +41,7 @@ Gotify、AdGuard、Beszel 都有自己的 HTTP API，客户端直接调。
 | GET | `/assets/*` | 共享静态资源 |
 | GET | `/api/ready` | 健康检查，**不认证** |
 | GET | `/api/info` | 能力登记簿（7 项：`mijia.table/mijia.cloud/agent/asr/mpd/notify/metrics`）+ `problems` |
-| GET | `/api/info/agent` | 引擎（可用性/版本/问题）、模型、模式列表、默认模式 |
+| GET | `/api/info/agent` | 引擎（可用性/问题/上次错误）、模型、模式列表、默认模式 |
 | GET | `/api/info/agent/state?mode=` | 排障：进程、会话、用量、stderr 尾部 |
 | GET | `/api/info/mijia` | 设备目录：房间顺序 + 每台的 id/name/room/kind（只读本地表，不碰云） |
 | GET | `/api/info/pages` | 功能页清单（slug/title/icon/order） |

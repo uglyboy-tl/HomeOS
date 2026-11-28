@@ -44,7 +44,7 @@ def _wait_text(client, mode="chat", seconds=5.0):
 def test_info_describes_engine_and_modes(agent_client):
     body = agent_client.get("/api/info/agent").json()
     assert body["engine"]["available"] is True
-    assert body["engine"]["version"] == "fake-pi 1.0"
+    assert "version" not in body["engine"]  # 自编的 pi 报 0.0.0，不往契约里放
     assert body["engine"]["problems"] == []
     assert [mode["id"] for mode in body["modes"]] == ["chat", "design"]
     assert body["default_mode"] == "chat"
