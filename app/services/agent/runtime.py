@@ -519,12 +519,10 @@ class Runtime:
     """所有模式的集合：按模式取会话、巡检回收、关停。"""
 
     def __init__(self) -> None:
-        self._version = ""
         self._conversations: dict[str, Conversation] = {}
         self._sweeper: asyncio.Task | None = None
 
     async def startup(self) -> None:
-        self._version = await rpc.version() if rpc.available() else ""
         if self._sweeper is None:
             self._sweeper = asyncio.create_task(self._sweep())
 
@@ -594,7 +592,6 @@ class Runtime:
         return {
             "name": "pi",
             "available": not problems,
-            "version": self._version,
             "problems": problems,
             "last_error": "" if status["ok"] else status["message"],
         }

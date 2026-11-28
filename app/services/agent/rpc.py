@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from collections import deque
 from dataclasses import dataclass
 
@@ -43,30 +44,24 @@ def available() -> bool:
 _version: str | None = None
 
 
-async def version() -> str:
-    """`pi --version`（缓存）：排障要看它，但不值得每次请求都跑一遍。"""
-    global _version
-    if _version is not None:
-        return _version
+def _read_version() -> str:
+    """同步跑一次 `pi --version`：超时、起不来、非零退出都算空串。"""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            config.PI_BIN,
-            "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        out = subprocess.run(
+            [config.PI_BIN, "--version"], capture_output=True, timeout=5.0, check=True
         )
-        async with asyncio.timeout(5.0):
-            out, _ = await proc.communicate()
-    except TimeoutError as e:
-        proc.kill()
-        await proc.wait()
-        log.warning("pi --version 超时：%s", e)
-        return ""
-    except OSError as e:
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
         log.warning("pi --version 失败：%s", e)
         return ""
-    _version = out.decode(errors="replace").strip()
-    return _version
+    return out.stdout.decode(errors="replace").strip()
+
+
+async def version() -> str:
+    """探活用的 `pi --version`：只缓存成功，失败下次再试（线程里跑 subprocess.run 才不留 fd）。"""
+    global _version
+    if _version is None:
+        _version = await asyncio.to_thread(_read_version) or None
+    return _version or ""
 
 
 def extension_args() -> list[str]:
