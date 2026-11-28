@@ -26,8 +26,10 @@
 | `./pages` → `/app/web/pages` | 功能页（agent 唯一能写的地方） |
 | `~/.config/mijia-api` → `/data/.config/mijia-api` | 米家登录态（rw，库要刷新 token；路径 `mijiaAPI` 写死） |
 
-`entrypoint.sh` 依次做：`HOME=/data`、`PI_CODING_AGENT_DIR=/data/pi`、把 `config/pi-*.json` 软链进
-`/data/pi`（改完点「新对话」即生效）、跑 `prepare.py`、`exec uvicorn`。
+`HOME=/data`、`PI_CODING_AGENT_DIR=/data/pi`、`HOMEOS_PI_AGENT_DIR=/data/pi` 是**镜像 ENV**（不是启动脚本设的），
+所以 `docker exec homeos pi ...` 直接就能跑，不必再 `-e`。
+`entrypoint.sh` 依次做：`mkdir /data/{pi,sessions}`、检查 `config/` 可写、导出 `HOMEOS_PI_EXTENSIONS`、
+把 `config/pi-*.json` 软链进 `/data/pi`（改完点「新对话」即生效）、跑 `prepare.py`、`exec uvicorn`。
 信任 Traefik 的转发头（只信任内网段，不写 `*`），所以日志里是真实客户端 IP、scheme 是 https。
 
 环境变量（全部有默认值，正常部署不用碰）：
@@ -59,9 +61,11 @@
 
 - **镜像层是累加的**：`COPY --from` 拷进来的二进制后面 `rm` 只盖层、不减体积；
   "装完就卸"的东西必须在同一个 `RUN` 里装与卸，否则镜像反而变大。
-- **pi 版本升级**：改 `ARG PI_VERSION` 即可（当前 1.7.0）。自编的二进制拿不到上游的额外资产：
-  `dist/theme`、`dist/export-html`、图片缩放用的 photon wasm 都不在 npm 包里，所以导出 HTML 与图片缩放
-  不可用（我们用不到）。版本号靠构建前写进 `package.json` 注入，否则 `pi --version` 会报 `0.0.0`。
+- **pi 版本升级**：改 `ARG PI_VERSION` 即可（当前 1.7.0）。自编的二进制不认 `--version`
+  （版本是运行时从二进制同目录的 `package.json` 读的，我们没拷），所以 `pi --version` 与
+  `/api/info/agent` 的 `engine.version` 都是 `0.0.0` —— 想知道实际版本看 `ARG PI_VERSION`。
+  自编还拿不到上游的额外资产：`dist/theme`、`dist/export-html`、图片缩放用的 photon wasm
+  都不在 npm 包里，所以导出 HTML 与图片缩放不可用（我们用不到）。
   升级后要验：chat 一轮、工具调用、`--extension` 仍是绝对路径、`bundle` 的 `--no-compile-autoload-*` 参数没变。
 - 想在容器里改 `app/*.py` 立即生效：只开 `HOMEOS_DEV=1` 就够，但每次存盘 app 进程会重启，
   助手页正在生成的那一轮会断（重发一句即可）。

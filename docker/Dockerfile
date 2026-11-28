@@ -3,7 +3,6 @@
 #
 # pi 官方只发 glibc 包，而 alpine 是 musl：所以自己用 bun 交叉编一份 musl 目标（两个架构都能编）。
 # 代价是拿不到上游二进制与 sha256，只有版本号钉住；实测 chat/工具/扩展都正常。
-# package.json 里的版本要先写好：bun add 会保留它，--version 才不会报 0.0.0
 FROM oven/bun:1 AS pibin
 ARG PI_VERSION=1.7.0
 ARG TARGETARCH
@@ -14,7 +13,6 @@ RUN set -eux; \
       *) echo "不支持的架构：${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     mkdir -p /w; cd /w; \
-    printf '{"name":"pi","private":true,"version":"%s"}\n' "${PI_VERSION}" > package.json; \
     bun add "@earendil-works/pi-coding-agent@${PI_VERSION}"; \
     bun build --compile --target="bun-linux-${target}-musl" \
       --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json \
@@ -31,7 +29,7 @@ RUN mkdir -p /pi-ext && cd /pi-ext \
 
 FROM python:3.12-alpine
 
-# HOME 与 XDG_* 由 entrypoint 设置，这里只放与运行模式无关的
+# 与运行模式无关的镜像级环境
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -44,7 +42,7 @@ RUN apk add --no-cache bash ca-certificates libstdc++ tini tzdata \
     && rm -rf /usr/share/doc /usr/share/man /usr/lib/bash
 
 COPY --from=pibin /w/pi-musl /opt/pi/pi
-RUN ln -sf /opt/pi/pi /usr/local/bin/pi && pi --version
+RUN ln -sf /opt/pi/pi /usr/local/bin/pi
 
 WORKDIR /app
 
@@ -66,6 +64,12 @@ COPY config ./defaults
 # 只要扩展自己的 dist 与 manifest，不搬整棵 node_modules
 COPY --from=piext /pi-ext/node_modules/cc-safety-net/dist /app/pi-ext/cc-safety-net/dist
 COPY --from=piext /pi-ext/node_modules/cc-safety-net/package.json /app/pi-ext/cc-safety-net/
+
+# 这三个放镜像 ENV（不是启动脚本 export）：docker exec 起的进程不继承 entrypoint 的环境，
+# 少了它们直接跑 pi 会去写只读的 /root 与 /app/.pi。必须在依赖装完之后设，否则构建期缓存会写到 /data。
+ENV HOME=/data \
+    PI_CODING_AGENT_DIR=/data/pi \
+    HOMEOS_PI_AGENT_DIR=/data/pi
 
 COPY docker/entrypoint.sh docker/prepare.py /app/docker/
 # 策略必须住在只读层：它是 agent 的护栏，不能放在可写的 config 挂载里

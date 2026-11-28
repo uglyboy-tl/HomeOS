@@ -13,9 +13,6 @@ if [ ! -w "$ROOT/config" ]; then
   exit 1
 fi
 
-export HOME="$DATA_DIR"
-export PI_CODING_AGENT_DIR="$DATA_DIR/pi"
-export HOMEOS_PI_AGENT_DIR="$DATA_DIR/pi"
 # cc-safety-net 构建期装好；运行时不联网、根目录只读
 export HOMEOS_PI_EXTENSIONS="$ROOT/pi-ext/cc-safety-net/dist/pi/index.js"
 
