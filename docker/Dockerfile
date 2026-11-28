@@ -2,9 +2,10 @@
 # 运行时镜像：一个容器跑 web，agent（pi）由 web 按请求拉起子进程。支持 amd64 与 arm64。
 #
 # pi 官方只发 glibc 包，而 alpine 是 musl：所以自己用 bun 交叉编一份 musl 目标（两个架构都能编）。
-# 代价是拿不到上游二进制与 sha256，只有版本号钉住（1.6.1）。实测 chat/工具/扩展都正常。
+# 代价是拿不到上游二进制与 sha256，只有版本号钉住；实测 chat/工具/扩展都正常。
+# package.json 里的版本要先写好：bun add 会保留它，--version 才不会报 0.0.0
 FROM oven/bun:1 AS pibin
-ARG PI_VERSION=1.6.1
+ARG PI_VERSION=1.7.0
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH:-arm64}" in \
@@ -13,6 +14,7 @@ RUN set -eux; \
       *) echo "不支持的架构：${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     mkdir -p /w; cd /w; \
+    printf '{"name":"pi","private":true,"version":"%s"}\n' "${PI_VERSION}" > package.json; \
     bun add "@earendil-works/pi-coding-agent@${PI_VERSION}"; \
     bun build --compile --target="bun-linux-${target}-musl" \
       --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json \
